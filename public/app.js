@@ -68,6 +68,24 @@ const mockNewsletters = [
 let cfg = { supabaseUrl: '', supabaseAnonKey: '', hasAI: false };
 let sb = null;
 
+// ── LOCAL STORAGE HELPERS ─────────────────────────────────────────────────────
+const LS_SOURCES_KEY = 'lwai_sources';
+
+function saveSourcesLocally() {
+  try {
+    const slim = state.sources.map(s => ({ feedUrl: s.feedUrl, title: s.title, type: s.type }));
+    localStorage.setItem(LS_SOURCES_KEY, JSON.stringify(slim));
+  } catch (e) { /* storage full or unavailable */ }
+}
+
+function loadSourcesLocally() {
+  try {
+    const raw = localStorage.getItem(LS_SOURCES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw); // returns [{feedUrl, title, type}, ...]
+  } catch (e) { return []; }
+}
+
 // ── INIT ──────────────────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -82,6 +100,26 @@ async function init() {
         if (event === 'SIGNED_IN') { state.user = session.user; navigate('dashboard'); }
         else if (event === 'SIGNED_OUT') { state.user = null; navigate('landing'); }
       });
+    } else {
+      // No Supabase — restore sources from localStorage so feeds survive page reloads
+      const saved = loadSourcesLocally();
+      if (saved.length) {
+        state.sources = saved.map(s => ({
+          id: uid(),
+          feedUrl: s.feedUrl,
+          title: s.title,
+          type: s.type || 'rss',
+          articles: [],
+          collapsed: false,
+        }));
+        // Re-fetch articles for each restored feed in the background
+        state.sources.forEach(src => {
+          fetch(`/api/ingest?url=${encodeURIComponent(src.feedUrl)}`)
+            .then(r => r.json())
+            .then(data => { src.articles = data.articles || []; refreshSourceSidebar(); })
+            .catch(() => {});
+        });
+      }
     }
   } catch (e) { console.warn('Init error:', e); }
   render();
@@ -1106,6 +1144,7 @@ async function submitAddSource(form) {
       collapsed: false,
     };
     state.sources.push(newSource);
+    saveSourcesLocally();
     await saveSourceToDB(newSource);
     input.value = '';
     toast(`Added ${data.articles?.length || 0} articles from "${data.source}"`, 'success');
@@ -1134,6 +1173,7 @@ function toggleFeed(feedId) {
 
 function removeFeed(feedId) {
   state.sources = state.sources.filter(s => s.id !== feedId);
+  saveSourcesLocally();
   deleteSourceFromDB(feedId);
   refreshSourceSidebar();
   toast('Source removed', 'info');
