@@ -988,8 +988,8 @@ function renderAppNav(active) {
   </div>
   <div class="nav-bottom">
     <div class="theme-toggle-row" data-action="toggle-theme" title="${state.design.darkMode ? 'Switch to light mode' : 'Switch to dark mode'}">
-      <span class="theme-toggle-icon">${state.design.darkMode ? '☀️' : '🌙'}</span>
-      <span class="theme-toggle-label">${state.design.darkMode ? 'Light mode' : 'Dark mode'}</span>
+      <span class="theme-toggle-icon">${state.design.darkMode ? '🌙' : '☀️'}</span>
+      <span class="theme-toggle-label">${state.design.darkMode ? 'Dark mode' : 'Light mode'}</span>
       <div class="theme-toggle-pill">
         <div class="theme-toggle-knob ${state.design.darkMode ? '' : 'on'}"></div>
       </div>
