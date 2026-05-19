@@ -81,6 +81,15 @@ function loadSourcesLocally() {
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Restore theme preference before first render
+  try {
+    const saved = localStorage.getItem('lwai_theme');
+    if (saved === 'light') {
+      state.design.darkMode = false;
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  } catch(e) {}
+
   try {
     const res = await fetch('/api/config');
     cfg = await res.json();
@@ -978,11 +987,18 @@ function renderAppNav(active) {
     </div>
   </div>
   <div class="nav-bottom">
+    <div class="theme-toggle-row" data-action="toggle-theme" title="${state.design.darkMode ? 'Switch to light mode' : 'Switch to dark mode'}">
+      <span class="theme-toggle-icon">${state.design.darkMode ? '☀️' : '🌙'}</span>
+      <span class="theme-toggle-label">${state.design.darkMode ? 'Light mode' : 'Dark mode'}</span>
+      <div class="theme-toggle-pill">
+        <div class="theme-toggle-knob ${state.design.darkMode ? '' : 'on'}"></div>
+      </div>
+    </div>
     <div class="user-row">
       <div class="user-avatar">${initial}</div>
       <div class="user-info">
         <div class="user-email">${email}</div>
-        <div class="user-plan">Pro Plan</div>
+        <div class="user-plan">Curanta</div>
       </div>
       <button class="btn-icon" data-action="logout" title="Sign out" style="font-size:15px">↩</button>
     </div>
@@ -2261,7 +2277,12 @@ function applyDesignSettings() {
 
 function toggleTheme() {
   state.design.darkMode = !state.design.darkMode;
-  document.documentElement.setAttribute('data-theme', state.design.darkMode ? 'dark' : 'light');
+  const theme = state.design.darkMode ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('lwai_theme', theme); } catch(e) {}
+  // Re-render nav so sun/moon icon flips
+  const nav = document.querySelector('.app-nav');
+  if (nav) nav.outerHTML = renderAppNav(state.view);
   updateDesignPanel();
 }
 
