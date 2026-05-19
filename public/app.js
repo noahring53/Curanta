@@ -13,6 +13,13 @@ const state = {
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
     prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
+    sectionOrder: ['topStories', 'leadStory', 'quickHits', 'cta'],
+    sectionMeta: {
+      topStories: { name: "Today's Briefing", type: 'briefing' },
+      leadStory:  { name: 'Lead Story',       type: 'lead' },
+      quickHits:  { name: 'Quick Hits',       type: 'hits' },
+      cta:        { name: 'Sponsor / CTA',    type: 'cta' },
+    },
   },
   sources: [],             // { id, feedUrl, title, type, articles:[], collapsed:false }
   tone: 'punchy-executive',
@@ -188,6 +195,11 @@ function handleClick(e) {
     case 'toggle-voice-panel': toggleVoicePanel(); break;
     case 'remove-voice-url':  removeVoiceURL(parseInt(d.idx)); break;
     case 'clear-brand-voice': state.brandVoice = ''; render(); break;
+    case 'show-add-section':  showAddSectionModal(); break;
+    case 'rename-section':    inlineRenameSection(d.sectionId); break;
+    case 'remove-section':    removeSection(d.sectionId); break;
+    case 'confirm-add-section': confirmAddSection(); break;
+    case 'fetch-briefing-examples': fetchBriefingExamples(); break;
   }
 }
 
@@ -1206,29 +1218,32 @@ function reorderStory(articleId, fromSection, toSection, insertIdx) {
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
 function renderEditorSections() {
-  return `
-${renderTopStoriesSection()}
-${renderSection('leadStory', 'Lead Story')}
-${renderSection('quickHits', 'Quick Hits')}
-${renderSection('cta', 'Sponsor / CTA')}
-`;
+  return state.newsletter.sectionOrder.map(id => {
+    const meta = state.newsletter.sectionMeta[id] || { name: id, type: 'generic' };
+    if (meta.type === 'briefing') return renderTopStoriesSection(id, meta.name);
+    return renderSection(id, meta.name, meta.type);
+  }).join('') + `<div style="padding:12px 0;text-align:center">
+    <button class="btn btn-ghost btn-sm" data-action="show-add-section">+ Add section</button>
+  </div>`;
 }
 
-function renderTopStoriesSection() {
-  const articles = state.newsletter.sections.topStories;
+function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today's Briefing") {
+  const articles = state.newsletter.sections[sectionId] || [];
   const content  = state.newsletter.topStoriesContent;
+  const canRemove = state.newsletter.sectionOrder.length > 1;
   return `
-<div class="editor-section" id="section-topStories">
+<div class="editor-section" id="section-${sectionId}">
   <div class="section-header">
-    <span class="section-label">Today's Briefing</span>
+    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Double-click to rename" style="cursor:pointer">${escHtml(sectionName)}</span>
     <div class="section-prompt-wrap" style="gap:6px">
-      <input class="section-prompt" data-section="topStories" value="${escHtml(state.newsletter.prompts.topStories)}" placeholder="Optional style instructions…" style="font-size:11px">
+      <input class="section-prompt" data-section="${sectionId}" value="${escHtml(state.newsletter.prompts[sectionId] || '')}" placeholder="Optional style instructions…" style="font-size:11px">
       <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
     </div>
   </div>
-  <div class="section-drop-zone" data-section="topStories">
-    <div class="section-content" id="section-content-topStories">
+  <div class="section-drop-zone" data-section="${sectionId}">
+    <div class="section-content" id="section-content-${sectionId}">
       ${articles.length === 0 && !content ? `
       <div class="drop-placeholder">
         <div class="drop-placeholder-icon">⊕</div>
@@ -1272,17 +1287,19 @@ function formatTopStories(text) {
     .join('');
 }
 
-function renderSection(sectionId, label) {
-  const articles = state.newsletter.sections[sectionId];
-  const prompt = state.newsletter.prompts[sectionId];
-  const isGrid = sectionId === 'quickHits';
+function renderSection(sectionId, label, type = 'hits') {
+  const articles = state.newsletter.sections[sectionId] || [];
+  const prompt = state.newsletter.prompts[sectionId] || '';
+  const isGrid = type === 'hits' || type === 'generic';
+  const canRemove = state.newsletter.sectionOrder.length > 1;
   return `
 <div class="editor-section" id="section-${sectionId}">
   <div class="section-header">
-    <span class="section-label">${label}</span>
+    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Double-click to rename" style="cursor:pointer">${escHtml(label)}</span>
     <div class="section-prompt-wrap">
       <input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt…">
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}">▶ Apply</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -1294,20 +1311,27 @@ function renderSection(sectionId, label) {
 }
 
 function refreshTopStoriesSection() {
-  const el = document.getElementById('section-topStories');
-  if (el) el.outerHTML = renderTopStoriesSection();
+  // Find the briefing-type section id (may be custom)
+  const briefingId = state.newsletter.sectionOrder.find(id => state.newsletter.sectionMeta[id]?.type === 'briefing') || 'topStories';
+  const briefingName = state.newsletter.sectionMeta[briefingId]?.name || "Today's Briefing";
+  const el = document.getElementById(`section-${briefingId}`);
+  if (el) el.outerHTML = renderTopStoriesSection(briefingId, briefingName);
   else render();
   setupDropZones();
 }
 
 function removeTopStory(articleId) {
-  state.newsletter.sections.topStories = state.newsletter.sections.topStories.filter(a => a.id !== articleId);
+  const briefingId = state.newsletter.sectionOrder.find(id => state.newsletter.sectionMeta[id]?.type === 'briefing') || 'topStories';
+  if (state.newsletter.sections[briefingId]) {
+    state.newsletter.sections[briefingId] = state.newsletter.sections[briefingId].filter(a => a.id !== articleId);
+  }
   refreshTopStoriesSection();
   scheduleSave();
 }
 
 async function generateTopStories() {
-  const articles = state.newsletter.sections.topStories;
+  const briefingId = state.newsletter.sectionOrder.find(id => state.newsletter.sectionMeta[id]?.type === 'briefing') || 'topStories';
+  const articles = state.newsletter.sections[briefingId] || [];
   if (!articles.length) { toast('Drop articles into Today\'s Briefing first', 'warn'); return; }
   const generateBtn = document.querySelector('[data-action="generate-top-stories"]');
   if (generateBtn) { generateBtn.disabled = true; generateBtn.textContent = '…'; }
@@ -1319,7 +1343,7 @@ async function generateTopStories() {
         action: 'top-stories',
         contents: articles,
         tone: state.tone,
-        prompt: state.newsletter.prompts.topStories || '',
+        prompt: state.newsletter.prompts[briefingId] || '',
         brandVoice: state.brandVoice,
       }),
     });
@@ -1377,14 +1401,24 @@ function showBriefingPromptModal() {
       <div class="modal-header">
         <div>
           <div class="modal-title">Generate briefing prompt from examples</div>
-          <div class="modal-sub">Paste 2–5 examples of your past briefings. Curanta will analyze the style and write a prompt that reproduces it.</div>
+          <div class="modal-sub">Paste URLs to past newsletters or briefing lines directly. Curanta will analyze the style and write a prompt that reproduces it.</div>
         </div>
         <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
       </div>
       <div class="modal-body" style="padding:16px 20px">
-        <textarea id="briefing-examples-input" class="input" rows="10"
-          placeholder="Paste your past briefing lines here, e.g.:&#10;📉 83% of school districts' reading scores declined since 2015 https://…&#10;📈 Fed holds rates at 5.25% for third straight meeting https://…&#10;🏛️ Senate passes $1.2T infrastructure bill 69-30 https://…"
-          style="width:100%;box-sizing:border-box;font-size:12px;line-height:1.7;resize:vertical;margin-bottom:12px"></textarea>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Past newsletter URLs (one per line)</label>
+          <textarea id="briefing-url-input" class="input" rows="3"
+            placeholder="https://example.com/newsletter-issue-47&#10;https://example.com/newsletter-issue-46"
+            style="width:100%;box-sizing:border-box;font-size:12px;line-height:1.7;resize:vertical;margin-bottom:8px"></textarea>
+          <button class="btn btn-outline btn-sm" data-action="fetch-briefing-examples" id="fetch-bp-btn">↓ Fetch content</button>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;font-weight:600;color:var(--text-2);display:block;margin-bottom:6px">Briefing examples (paste or auto-filled after fetch)</label>
+          <textarea id="briefing-examples-input" class="input" rows="8"
+            placeholder="Paste your past briefing lines here, e.g.:&#10;📉 83% of school districts' reading scores declined since 2015 https://…&#10;📈 Fed holds rates at 5.25% for third straight meeting https://…&#10;🏛️ Senate passes $1.2T infrastructure bill 69-30 https://…"
+            style="width:100%;box-sizing:border-box;font-size:12px;line-height:1.7;resize:vertical"></textarea>
+        </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary" style="flex:1" data-action="generate-briefing-prompt" id="gen-bp-btn">✨ Generate prompt</button>
           <button class="btn btn-outline" data-action="close-modal">Cancel</button>
@@ -1393,7 +1427,47 @@ function showBriefingPromptModal() {
     </div>
   </div>`;
   modal.querySelector('#bp-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
-  modal.querySelector('#briefing-examples-input').focus();
+  modal.querySelector('#briefing-url-input').focus();
+}
+
+async function fetchBriefingExamples() {
+  const urlInput = document.getElementById('briefing-url-input');
+  const examplesInput = document.getElementById('briefing-examples-input');
+  const fetchBtn = document.getElementById('fetch-bp-btn');
+  const raw = urlInput?.value?.trim();
+  if (!raw) { toast('Paste some newsletter URLs first', 'warn'); return; }
+
+  const urls = raw.split(/[\n,]+/).map(u => u.trim()).filter(u => {
+    try { new URL(u); return true; } catch { return false; }
+  });
+  if (!urls.length) { toast('No valid URLs found', 'warn'); return; }
+
+  if (fetchBtn) { fetchBtn.disabled = true; fetchBtn.textContent = 'Fetching…'; }
+
+  const results = await Promise.allSettled(
+    urls.map(async url => {
+      const res = await fetch(`/api/ingest?url=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Could not fetch');
+      return data.articles?.map(a => [a.title, a.text || a.summary].filter(Boolean).join('\n\n')).join('\n\n---\n\n') || '';
+    })
+  );
+
+  let added = 0, failed = 0;
+  const texts = [];
+  results.forEach(r => {
+    if (r.status === 'fulfilled' && r.value.trim()) { texts.push(r.value); added++; }
+    else failed++;
+  });
+
+  if (texts.length && examplesInput) {
+    const existing = examplesInput.value.trim();
+    examplesInput.value = [existing, ...texts].filter(Boolean).join('\n\n---\n\n');
+  }
+
+  if (fetchBtn) { fetchBtn.disabled = false; fetchBtn.textContent = '↓ Fetch content'; }
+  if (added) toast(`${added} newsletter${added > 1 ? 's' : ''} fetched${failed ? `, ${failed} failed` : ''}`, 'success');
+  else toast(`All URLs failed to fetch`, 'error');
 }
 
 async function generateBriefingPrompt() {
@@ -1415,7 +1489,8 @@ async function generateBriefingPrompt() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed');
-    state.newsletter.prompts.topStories = data.result;
+    const briefingId = state.newsletter.sectionOrder.find(id => state.newsletter.sectionMeta[id]?.type === 'briefing') || 'topStories';
+    state.newsletter.prompts[briefingId] = data.result;
     closeModal();
     refreshTopStoriesSection();
     scheduleSave();
@@ -1502,8 +1577,9 @@ function formatContent(text) {
 function refreshSectionContent(sectionId) {
   const container = document.getElementById(`section-content-${sectionId}`);
   if (!container) return;
-  const articles = state.newsletter.sections[sectionId];
-  const isGrid = sectionId === 'quickHits';
+  const articles = state.newsletter.sections[sectionId] || [];
+  const sectionType = state.newsletter.sectionMeta[sectionId]?.type || 'hits';
+  const isGrid = sectionType === 'hits' || sectionType === 'generic';
   container.className = `section-content ${isGrid && articles.length > 0 ? 'quick-hits-grid' : ''}`;
   container.innerHTML = articles.length === 0
     ? renderDropPlaceholder(sectionId)
@@ -1533,16 +1609,19 @@ function findArticle(articleId) {
 async function addToSection(articleId, sectionId) {
   const article = findArticle(articleId);
   if (!article) { toast('Article not found', 'error'); return; }
+  if (!state.newsletter.sections[sectionId]) state.newsletter.sections[sectionId] = [];
   if (state.newsletter.sections[sectionId].some(a => a.id === articleId)) {
     toast('Article already in this section', 'warn'); return;
   }
-  if (sectionId === 'topStories') {
-    state.newsletter.sections.topStories.push({ ...article });
+  const sectionType = state.newsletter.sectionMeta[sectionId]?.type || 'hits';
+  if (sectionType === 'briefing') {
+    state.newsletter.sections[sectionId].push({ ...article });
     refreshTopStoriesSection();
     scheduleSave();
     return;
   }
-  const action = sectionId === 'leadStory' ? 'lead-story' : sectionId === 'quickHits' ? 'quick-hit' : 'cta';
+  const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
+  const action = typeToAction[sectionType] || 'quick-hit';
   const entry = { ...article, content: null, loading: true };
   state.newsletter.sections[sectionId].push(entry);
   refreshSectionContent(sectionId);
@@ -1686,7 +1765,8 @@ async function duplicateNewsletter(id) {
 async function applyPrompt(sectionId) {
   const articles = state.newsletter.sections[sectionId];
   if (!articles.length) { toast('No articles in this section yet', 'warn'); return; }
-  const action = sectionId === 'leadStory' ? 'lead-story' : sectionId === 'quickHits' ? 'quick-hit' : 'cta';
+  const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
+  const action = typeToAction[state.newsletter.sectionMeta[sectionId]?.type] || 'quick-hit';
   const prompt = state.newsletter.prompts[sectionId];
   articles.forEach(a => { a.loading = true; });
   refreshSectionContent(sectionId);
@@ -1707,7 +1787,8 @@ async function rewriteStory(articleId, sectionId) {
   article.loading = true;
   refreshSectionContent(sectionId);
   try {
-    const action = sectionId === 'leadStory' ? 'lead-story' : sectionId === 'quickHits' ? 'quick-hit' : 'cta';
+    const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
+    const action = typeToAction[state.newsletter.sectionMeta[sectionId]?.type] || 'quick-hit';
     article.content = await callAI(action, article, { prompt: state.newsletter.prompts[sectionId] });
   } catch (e) { toast('Rewrite failed: ' + e.message, 'error'); }
   article.loading = false;
@@ -2325,6 +2406,79 @@ function mockPublish() {
 }
 window.mockPublish = mockPublish;
 
+// ── CUSTOM SECTIONS ───────────────────────────────────────────────────────────
+function showAddSectionModal() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  modal.innerHTML = `
+  <div class="modal-overlay" id="add-section-overlay">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Add section</div>
+          <div class="modal-sub">Give your new section a name and choose how AI will write content for it.</div>
+        </div>
+        <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
+      </div>
+      <div class="modal-body" style="padding:16px 20px">
+        <div class="form-group" style="margin-bottom:12px">
+          <label class="form-label" for="new-section-name">Section name</label>
+          <input id="new-section-name" class="input" type="text" placeholder="e.g. Market Moves, Policy Watch…" style="width:100%;box-sizing:border-box">
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label class="form-label" for="new-section-type">Content style</label>
+          <select id="new-section-type" class="input" style="width:100%;box-sizing:border-box">
+            <option value="hits">Quick hits (short blurbs)</option>
+            <option value="lead">Lead story (long form)</option>
+            <option value="cta">CTA / Sponsor</option>
+            <option value="generic">Generic (same as quick hits)</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" style="flex:1" data-action="confirm-add-section">Add section</button>
+          <button class="btn btn-outline" data-action="close-modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  modal.querySelector('#add-section-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+  modal.querySelector('#new-section-name').focus();
+}
+
+function confirmAddSection() {
+  const name = document.getElementById('new-section-name')?.value.trim();
+  const type = document.getElementById('new-section-type')?.value;
+  if (!name) { toast('Enter a section name', 'warn'); return; }
+  const id = 'custom_' + uid();
+  state.newsletter.sectionOrder.push(id);
+  state.newsletter.sectionMeta[id] = { name, type };
+  state.newsletter.sections[id] = [];
+  state.newsletter.prompts[id] = '';
+  closeModal();
+  render();
+  scheduleSave();
+}
+
+function removeSection(sectionId) {
+  if (state.newsletter.sectionOrder.length <= 1) { toast('Must have at least one section', 'warn'); return; }
+  state.newsletter.sectionOrder = state.newsletter.sectionOrder.filter(id => id !== sectionId);
+  delete state.newsletter.sections[sectionId];
+  delete state.newsletter.sectionMeta[sectionId];
+  delete state.newsletter.prompts[sectionId];
+  render();
+  scheduleSave();
+}
+
+function inlineRenameSection(sectionId) {
+  const current = state.newsletter.sectionMeta[sectionId]?.name || '';
+  const newName = window.prompt('Rename section:', current);
+  if (newName && newName.trim()) {
+    state.newsletter.sectionMeta[sectionId].name = newName.trim();
+    render();
+    scheduleSave();
+  }
+}
+
 // ── PERSISTENCE LAYER ─────────────────────────────────────────────────────────
 
 // Auto-save debounce
@@ -2352,7 +2506,11 @@ async function saveNewsletter() {
     title: state.newsletter.title,
     subject: state.newsletter.subject,
     preview_text: state.newsletter.previewText,
-    sections: state.newsletter.sections,
+    sections: {
+      ...state.newsletter.sections,
+      __order: state.newsletter.sectionOrder,
+      __meta: state.newsletter.sectionMeta,
+    },
     prompts: state.newsletter.prompts,
     top_stories_content: state.newsletter.topStoriesContent,
     status: state.approvalStatus,
@@ -2400,11 +2558,19 @@ async function loadBuilderData(newsletterId) {
   state.newsletterId = nl.id;
   state.newsletter.title       = nl.title        || 'Untitled Newsletter';
   state.newsletter.subject     = nl.subject       || '';
-  state.newsletter.previewText      = nl.preview_text       || '';
-  state.newsletter.sections         = nl.sections           || { topStories: [], leadStory: [], quickHits: [], cta: [] };
-  state.newsletter.sections.topStories = state.newsletter.sections.topStories || [];
+  state.newsletter.previewText = nl.preview_text  || '';
+  const raw = nl.sections || {};
+  state.newsletter.sectionOrder = raw.__order || ['topStories', 'leadStory', 'quickHits', 'cta'];
+  state.newsletter.sectionMeta  = raw.__meta  || {
+    topStories: { name: "Today's Briefing", type: 'briefing' },
+    leadStory:  { name: 'Lead Story',       type: 'lead' },
+    quickHits:  { name: 'Quick Hits',       type: 'hits' },
+    cta:        { name: 'Sponsor / CTA',    type: 'cta' },
+  };
+  const { __order, __meta, ...sectionData } = raw;
+  state.newsletter.sections = { topStories: [], leadStory: [], quickHits: [], cta: [], ...sectionData };
   state.newsletter.topStoriesContent = nl.top_stories_content || '';
-  state.newsletter.prompts          = nl.prompts            || state.newsletter.prompts;
+  state.newsletter.prompts           = nl.prompts            || state.newsletter.prompts;
   state.approvalStatus         = nl.status        || 'draft';
   state.sources = await loadSourcesFromDB();
 }
@@ -2418,6 +2584,13 @@ function resetNewsletter() {
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
     prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
+    sectionOrder: ['topStories', 'leadStory', 'quickHits', 'cta'],
+    sectionMeta: {
+      topStories: { name: "Today's Briefing", type: 'briefing' },
+      leadStory:  { name: 'Lead Story',       type: 'lead' },
+      quickHits:  { name: 'Quick Hits',       type: 'hits' },
+      cta:        { name: 'Sponsor / CTA',    type: 'cta' },
+    },
   };
   state.approvalStatus = 'draft';
   state.teamComments = [];
