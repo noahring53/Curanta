@@ -1271,9 +1271,14 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
   const content  = state.newsletter.topStoriesContent;
   const canRemove = state.newsletter.sectionOrder.length > 1;
   return `
-<div class="editor-section" id="section-${sectionId}">
+<div class="editor-section" id="section-${sectionId}" draggable="true"
+  ondragstart="sectionDragStart(event,'${sectionId}')"
+  ondragend="sectionDragEnd(event)"
+  ondragover="sectionDragOver(event,'${sectionId}')"
+  ondrop="sectionDrop(event,'${sectionId}')">
   <div class="section-header">
-    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Double-click to rename" style="cursor:pointer">${escHtml(sectionName)}</span>
+    <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
+    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(sectionName)}</span>
     <div class="section-prompt-wrap" style="gap:6px">
       <input class="section-prompt" data-section="${sectionId}" value="${escHtml(state.newsletter.prompts[sectionId] || '')}" placeholder="Optional style instructions…" style="font-size:11px">
       <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
@@ -1332,9 +1337,14 @@ function renderSection(sectionId, label, type = 'hits') {
   const isGrid = type === 'hits' || type === 'generic';
   const canRemove = state.newsletter.sectionOrder.length > 1;
   return `
-<div class="editor-section" id="section-${sectionId}">
+<div class="editor-section" id="section-${sectionId}" draggable="true"
+  ondragstart="sectionDragStart(event,'${sectionId}')"
+  ondragend="sectionDragEnd(event)"
+  ondragover="sectionDragOver(event,'${sectionId}')"
+  ondrop="sectionDrop(event,'${sectionId}')">
   <div class="section-header">
-    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Double-click to rename" style="cursor:pointer">${escHtml(label)}</span>
+    <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
+    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
     <div class="section-prompt-wrap">
       <input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt…">
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}">▶ Apply</button>
@@ -2549,6 +2559,62 @@ function inlineRenameSection(sectionId) {
     scheduleSave();
   }
 }
+
+// ── SECTION DRAG-TO-REORDER ───────────────────────────────────────────────────
+function sectionDragStart(e, sectionId) {
+  // Only allow drag when initiated from the drag handle
+  if (state._sectionDragReady !== sectionId) { e.preventDefault(); return; }
+  state._sectionDragReady = null;
+  state.draggedSection = sectionId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', sectionId);
+  setTimeout(() => { document.getElementById(`section-${sectionId}`)?.classList.add('section-dragging'); }, 0);
+}
+window.sectionDragStart = sectionDragStart;
+
+function sectionDragEnd(e) {
+  state.draggedSection = null;
+  state._sectionDragReady = null;
+  document.querySelectorAll('.editor-section').forEach(el => {
+    el.classList.remove('section-dragging', 'section-drag-over-top', 'section-drag-over-bottom');
+  });
+}
+window.sectionDragEnd = sectionDragEnd;
+
+function sectionDragOver(e, sectionId) {
+  if (!state.draggedSection || state.draggedSection === sectionId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const el = document.getElementById(`section-${sectionId}`);
+  const rect = el.getBoundingClientRect();
+  const before = e.clientY < rect.top + rect.height / 2;
+  document.querySelectorAll('.editor-section').forEach(el => el.classList.remove('section-drag-over-top', 'section-drag-over-bottom'));
+  el.classList.add(before ? 'section-drag-over-top' : 'section-drag-over-bottom');
+}
+window.sectionDragOver = sectionDragOver;
+
+function sectionDrop(e, targetId) {
+  if (!state.draggedSection || state.draggedSection === targetId) return;
+  e.preventDefault();
+  const order = [...state.newsletter.sectionOrder];
+  const fromIdx = order.indexOf(state.draggedSection);
+  const el = document.getElementById(`section-${targetId}`);
+  const rect = el.getBoundingClientRect();
+  const dropBefore = e.clientY < rect.top + rect.height / 2;
+  // Remove dragged item
+  order.splice(fromIdx, 1);
+  // Recalculate target index after removal, then insert
+  const newToIdx = order.indexOf(targetId);
+  order.splice(dropBefore ? newToIdx : newToIdx + 1, 0, state.draggedSection);
+  state.newsletter.sectionOrder = order;
+  state.draggedSection = null;
+  document.querySelectorAll('.editor-section').forEach(el => el.classList.remove('section-dragging', 'section-drag-over-top', 'section-drag-over-bottom'));
+  // Re-render sections only (avoids full re-render)
+  const sectionsEl = document.getElementById('editor-sections');
+  if (sectionsEl) { sectionsEl.innerHTML = renderEditorSections(); setupDropZones(); }
+  scheduleSave();
+}
+window.sectionDrop = sectionDrop;
 
 // ── PERSISTENCE LAYER ─────────────────────────────────────────────────────────
 

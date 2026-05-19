@@ -700,8 +700,17 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 /* Editor sections */
 .editor-section {
   background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-lg);
-  overflow: hidden;
+  overflow: hidden; transition: opacity 0.15s, box-shadow 0.15s;
 }
+.editor-section.section-dragging { opacity: 0.4; box-shadow: none; }
+.editor-section.section-drag-over-top { box-shadow: 0 -3px 0 0 var(--accent); }
+.editor-section.section-drag-over-bottom { box-shadow: 0 3px 0 0 var(--accent); }
+.section-drag-handle {
+  font-size: 14px; color: var(--text-3); cursor: grab; padding: 0 2px 0 0;
+  line-height: 1; user-select: none; flex-shrink: 0;
+}
+.section-drag-handle:active { cursor: grabbing; }
+.section-header:hover .section-drag-handle { color: var(--text-2); }
 .section-header {
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   border-bottom: 1px solid var(--border); background: var(--bg-3); flex-wrap: wrap; gap: 8px;
