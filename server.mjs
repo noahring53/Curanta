@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 
 const rssParser = new Parser({
   timeout: 12000,
-  headers: { 'User-Agent': 'LetterWriterAI/1.0 RSS Reader' },
+  headers: { 'User-Agent': 'Curanta/1.0 RSS Reader' },
 });
 
 const anthropic = process.env.ANTHROPIC_API_KEY
@@ -48,7 +48,7 @@ function timeAgo(dateStr) {
 async function fetchArticle(url) {
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; LetterWriterAI/1.0)',
+      'User-Agent': 'Mozilla/5.0 (compatible; Curanta/1.0)',
       Accept: 'text/html,application/xhtml+xml',
     },
     signal: AbortSignal.timeout(10000),
@@ -539,7 +539,7 @@ app.get('*', (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n  LetterWriterAI → http://localhost:${PORT}`);
+  console.log(`\n  Curanta → http://localhost:${PORT}`);
   console.log(`  AI: ${process.env.ANTHROPIC_API_KEY ? '✓ Anthropic connected' : '○ Mock mode (no ANTHROPIC_API_KEY)'}`);
   console.log(`  Auth: ${process.env.SUPABASE_URL ? '✓ Supabase connected' : '○ Not configured (no SUPABASE_URL)'}\n`);
 });

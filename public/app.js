@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════════════════
-   LetterWriterAI — Frontend Application
+   Curanta — Frontend Application
 ════════════════════════════════════════════════════════════════════════════ */
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
@@ -241,7 +241,7 @@ function renderLanding() {
   <nav class="landing-nav">
     <div class="nav-logo">
       <div class="nav-logo-icon">L</div>
-      LetterWriterAI
+      Curanta
     </div>
     <div class="nav-links">
       <a class="nav-link" href="#features">Features</a>
@@ -488,7 +488,7 @@ function renderLanding() {
   <footer class="landing-footer">
     <div class="nav-logo">
       <div class="nav-logo-icon">L</div>
-      LetterWriterAI
+      Curanta
     </div>
     <div class="footer-links">
       <a href="#">Privacy</a>
@@ -496,7 +496,7 @@ function renderLanding() {
       <a href="#">Status</a>
       <a href="#">Docs</a>
     </div>
-    <div style="color:var(--text-3);font-size:12px">© 2025 LetterWriterAI. All rights reserved.</div>
+    <div style="color:var(--text-3);font-size:12px">© 2025 Curanta. All rights reserved.</div>
   </footer>
 </div>`;
 }
@@ -511,7 +511,7 @@ function showAuthModal(tab = 'login') {
     <div class="modal">
       <div class="modal-header">
         <div>
-          <div class="modal-title">Welcome to LetterWriterAI</div>
+          <div class="modal-title">Welcome to Curanta</div>
           <div class="modal-sub">Sign in to access the newsletter builder</div>
         </div>
         <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
@@ -633,24 +633,24 @@ function renderDashboard() {
     <div class="dashboard-content">
       <div class="stat-grid">
         <div class="stat-card">
-          <div class="stat-label">Total Subscribers</div>
-          <div class="stat-value">12,847</div>
-          <div class="stat-change up">↑ 3.2% this month</div>
+          <div class="stat-label">Newsletters</div>
+          <div class="stat-value">${state.dbNewsletters.length || 0}</div>
+          <div class="stat-change">total created</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Avg. Open Rate</div>
-          <div class="stat-value">28.4%</div>
-          <div class="stat-change up">↑ 1.8% vs. last month</div>
+          <div class="stat-label">Drafts</div>
+          <div class="stat-value">${state.dbNewsletters.filter(n => n.status === 'draft').length || 0}</div>
+          <div class="stat-change">in progress</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">This Month</div>
-          <div class="stat-value">4</div>
-          <div class="stat-change">newsletters sent</div>
+          <div class="stat-label">Sources</div>
+          <div class="stat-value">${state.sources.length || 0}</div>
+          <div class="stat-change">RSS feeds connected</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">AI Credits Used</div>
-          <div class="stat-value">${state.hasAI ? '47' : '—'}</div>
-          <div class="stat-change">${state.hasAI ? 'of unlimited (Pro)' : 'AI not configured'}</div>
+          <div class="stat-label">AI</div>
+          <div class="stat-value">${state.hasAI ? '✓' : '—'}</div>
+          <div class="stat-change">${state.hasAI ? 'Connected' : 'Not configured'}</div>
         </div>
       </div>
 
@@ -901,7 +901,7 @@ function renderAppNav(active) {
   <div class="app-nav-header">
     <div class="app-nav-logo">
       <div class="app-nav-logo-icon">L</div>
-      LetterWriterAI
+      Curanta
     </div>
   </div>
   <div class="nav-items">
