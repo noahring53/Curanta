@@ -88,10 +88,20 @@ async function init() {
     if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
       sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
       const { data: { session } } = await sb.auth.getSession();
-      if (session) { state.user = session.user; state.view = 'dashboard'; }
-      sb.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN') { state.user = session.user; navigate('dashboard'); }
-        else if (event === 'SIGNED_OUT') { state.user = null; navigate('landing'); }
+      if (session) {
+        state.user = session.user;
+        state.view = 'dashboard';
+        await loadUserSettings();
+      }
+      sb.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN') {
+          state.user = session.user;
+          await loadUserSettings();
+          navigate('dashboard');
+        } else if (event === 'SIGNED_OUT') {
+          state.user = null;
+          navigate('landing');
+        }
       });
     } else {
       // No Supabase — restore sources from localStorage so feeds survive page reloads
@@ -226,7 +236,7 @@ function handleClick(e) {
     case 'add-comment':     addComment(); break;
     case 'toggle-voice-panel': toggleVoicePanel(); break;
     case 'remove-voice-url':  removeVoiceURL(parseInt(d.idx)); break;
-    case 'clear-brand-voice': state.brandVoice = ''; render(); break;
+    case 'clear-brand-voice': state.brandVoice = ''; state.brandVoiceSamples = ''; state.voiceUrls = []; scheduleSettingsSave(); render(); break;
     case 'show-add-section':  showAddSectionModal(); break;
     case 'rename-section':    inlineRenameSection(d.sectionId); break;
     case 'remove-section':    removeSection(d.sectionId); break;
@@ -252,7 +262,7 @@ function handleInput(e) {
   else if (t.matches('.section-prompt')) { state.newsletter.prompts[t.dataset.section] = t.value; scheduleSave(); }
   else if (t.matches('#spacing-slider')) { state.design.spacing = parseInt(t.value); document.querySelector('.spacing-val') && (document.querySelector('.spacing-val').textContent = t.value); applyDesignSettings(); }
   else if (t.matches('#radius-slider')) { state.design.borderRadius = parseInt(t.value); document.querySelector('.radius-val') && (document.querySelector('.radius-val').textContent = t.value + 'px'); applyDesignSettings(); }
-  else if (t.matches('#color-picker')) { state.design.primaryColor = t.value; applyDesignSettings(); }
+  else if (t.matches('#color-picker')) { state.design.primaryColor = t.value; scheduleSettingsSave(); applyDesignSettings(); }
   else if (t.matches('#brand-voice-samples')) state.brandVoiceSamples = t.value;
   else if (t.matches('.story-edit-textarea')) {
     const article = state.newsletter.sections[t.dataset.section]?.find(a => a.id === t.dataset.articleId);
@@ -1983,6 +1993,7 @@ function refreshAIPanel() {
 
 function selectTone(tone) {
   state.tone = tone;
+  scheduleSettingsSave();
   refreshAIPanel();
 }
 
@@ -2042,6 +2053,7 @@ async function fetchVoiceURL(form) {
 
 function removeVoiceURL(idx) {
   state.voiceUrls.splice(idx, 1);
+  scheduleSettingsSave();
   refreshAIPanel();
   refreshSettingsVoiceSection();
 }
@@ -2133,6 +2145,7 @@ async function generateBrandVoice() {
   try {
     state.brandVoice = await callAI('brand-voice', { text: state.brandVoiceSamples });
     toast('✓ Voice profile generated', 'success');
+    scheduleSettingsSave();
     refreshVoiceBadge();
     refreshSettingsVoiceSection();
   } catch (e) { toast(e.message, 'error'); }
@@ -2617,6 +2630,43 @@ function sectionDrop(e, targetId) {
 window.sectionDrop = sectionDrop;
 
 // ── PERSISTENCE LAYER ─────────────────────────────────────────────────────────
+
+// ── User settings (brand voice, tone, color) ──────────────────────────────────
+let _settingsTimer = null;
+function scheduleSettingsSave() {
+  if (!sb || !state.user) return;
+  clearTimeout(_settingsTimer);
+  _settingsTimer = setTimeout(saveUserSettings, 1500);
+}
+
+async function saveUserSettings() {
+  if (!sb || !state.user) return;
+  const { error } = await sb.from('user_settings').upsert({
+    user_id: state.user.id,
+    brand_voice: state.brandVoice || '',
+    brand_voice_samples: state.brandVoiceSamples || '',
+    voice_urls: state.voiceUrls || [],
+    tone: state.tone || 'punchy-executive',
+    brand_color: state.design.primaryColor || '#6366f1',
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id' });
+  if (error) console.error('Settings save error:', error);
+}
+
+async function loadUserSettings() {
+  if (!sb || !state.user) return;
+  const { data, error } = await sb
+    .from('user_settings')
+    .select('*')
+    .eq('user_id', state.user.id)
+    .single();
+  if (error || !data) return; // no settings yet — use defaults
+  if (data.brand_voice)         state.brandVoice         = data.brand_voice;
+  if (data.brand_voice_samples) state.brandVoiceSamples  = data.brand_voice_samples;
+  if (data.voice_urls?.length)  state.voiceUrls          = data.voice_urls;
+  if (data.tone)                state.tone               = data.tone;
+  if (data.brand_color)         state.design.primaryColor = data.brand_color;
+}
 
 // Auto-save debounce
 let _saveTimer = null;
