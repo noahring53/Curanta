@@ -878,13 +878,17 @@ function renderSettingsPage() {
         </div>` : ''}
         <textarea id="brand-voice-samples" class="input" rows="5" placeholder="Or paste newsletter samples directly…" style="width:100%;margin-bottom:10px;resize:vertical">${escHtml(state.brandVoiceSamples)}</textarea>
         <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary" data-action="generate-brand-voice">Generate voice profile</button>
-          ${state.brandVoice ? `<button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear profile</button>` : ''}
+          <button class="btn btn-primary" data-action="generate-brand-voice">${state.brandVoice ? '↺ Regenerate voice' : 'Generate voice profile'}</button>
+          ${state.brandVoice ? `<button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear</button>` : ''}
         </div>
         ${state.brandVoice ? `
-        <div class="card" style="margin-top:14px;padding:14px 16px;border-color:var(--green)">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--green);margin-bottom:8px">Voice Profile</div>
-          <div style="font-size:13px;color:var(--text-1);line-height:1.7;white-space:pre-wrap">${escHtml(state.brandVoice)}</div>
+        <div style="margin-top:16px;border:1.5px solid var(--green);border-radius:var(--r-md);overflow:hidden">
+          <div style="background:var(--green);padding:8px 14px;display:flex;align-items:center;gap:8px">
+            <span style="font-size:13px">🎙</span>
+            <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#fff">Voice Profile — Active</span>
+            <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.75)">Applied to every AI generation</span>
+          </div>
+          <div style="padding:14px 16px;background:var(--bg-1);font-size:13px;color:var(--text-1);line-height:1.8;white-space:pre-wrap">${escHtml(state.brandVoice)}</div>
         </div>` : ''}
       </div>
 
@@ -988,6 +992,7 @@ function renderBuilder() {
     </div>
     <div class="builder-topbar-center">
       ${!state.hasAI ? `<div class="mock-badge">✦ Mock AI</div>` : `<div class="badge badge-green"><span class="dot dot-green"></span> AI Connected</div>`}
+      <div id="voice-status-badge">${renderVoiceBadge()}</div>
     </div>
     <div class="builder-topbar-right">
       <button class="btn btn-ghost btn-sm" data-action="show-preview">⊙ Preview</button>
@@ -2014,12 +2019,15 @@ async function fetchVoiceURL(form) {
   });
 
   input.value = '';
-  if (added) toast(`${added} newsletter${added > 1 ? 's' : ''} imported${failed ? `, ${failed} failed` : ''}`, added ? 'success' : 'warn');
+  if (added) toast(`${added} newsletter${added > 1 ? 's' : ''} imported — generating voice profile…`, 'info');
   else toast(`All ${failed} URLs failed to fetch`, 'error');
 
   state.voiceUrlLoading = false;
   refreshAIPanel();
   refreshSettingsVoiceSection();
+
+  // Auto-generate voice profile from the imported content
+  if (added > 0) await generateBrandVoice();
 }
 
 function removeVoiceURL(idx) {
@@ -2095,12 +2103,28 @@ async function generatePreviewText() {
   state.aiLoading = false; refreshAIPanel();
 }
 
+function renderVoiceBadge() {
+  if (!state.brandVoice) {
+    return `<div class="badge badge-default" style="cursor:pointer" data-action="navigate" data-view="settings" title="No brand voice set — go to Settings to add one">🎙 No voice</div>`;
+  }
+  // Show first ~120 chars of the profile as a tooltip
+  const preview = escHtml(state.brandVoice.slice(0, 160).replace(/\n/g, ' '));
+  return `<div class="badge badge-green" style="cursor:pointer" data-action="navigate" data-view="settings" title="${preview}…">🎙 Voice active</div>`;
+}
+
+function refreshVoiceBadge() {
+  const el = document.getElementById('voice-status-badge');
+  if (el) el.innerHTML = renderVoiceBadge();
+}
+
 async function generateBrandVoice() {
   if (!state.brandVoiceSamples.trim()) { toast('Paste newsletter samples first', 'warn'); return; }
   state.aiLoading = true; refreshAIPanel();
   try {
     state.brandVoice = await callAI('brand-voice', { text: state.brandVoiceSamples });
-    toast('Voice profile generated', 'success');
+    toast('✓ Voice profile generated', 'success');
+    refreshVoiceBadge();
+    refreshSettingsVoiceSection();
   } catch (e) { toast(e.message, 'error'); }
   state.aiLoading = false; refreshAIPanel();
 }
