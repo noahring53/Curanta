@@ -12,12 +12,7 @@ const state = {
     previewText: '',
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
-    prompts: {
-      topStories: '',
-      leadStory: 'Write 300-400 words in a punchy newsletter style. Start with the big takeaway, then use labeled sections: "The details," "Has this been done before?", "The difference," "Why it matters," and "Real talk." Include a source link at the end.',
-      quickHits: 'Write a 60-90 word punchy newsletter blurb. Bold the headline. Be informative and direct. End with a → link.',
-      cta: 'Write a compelling 2-3 sentence call-to-action for newsletter readers to upgrade to Pro or share with a colleague.',
-    },
+    prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
   },
   sources: [],             // { id, feedUrl, title, type, articles:[], collapsed:false }
   tone: 'punchy-executive',
@@ -158,6 +153,8 @@ function handleClick(e) {
     case 'remove-from-section': removeFromSection(d.articleId, d.section); break;
     case 'apply-prompt':      applyPrompt(d.section); break;
     case 'generate-top-stories': generateTopStories(); break;
+    case 'briefing-prompt-from-examples': showBriefingPromptModal(); break;
+    case 'generate-briefing-prompt': generateBriefingPrompt(); break;
     case 'remove-top-story':  removeTopStory(d.articleId); break;
     case 'clear-top-stories': state.newsletter.topStoriesContent = ''; refreshTopStoriesSection(); scheduleSave(); break;
     case 'edit-top-stories':  editTopStories(); break;
@@ -1225,7 +1222,8 @@ function renderTopStoriesSection() {
   <div class="section-header">
     <span class="section-label">Today's Briefing</span>
     <div class="section-prompt-wrap" style="gap:6px">
-      <input class="section-prompt" data-section="topStories" value="${escHtml(state.newsletter.prompts.topStories)}" placeholder="Optional instructions…" style="font-size:11px">
+      <input class="section-prompt" data-section="topStories" value="${escHtml(state.newsletter.prompts.topStories)}" placeholder="Optional style instructions…" style="font-size:11px">
+      <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
     </div>
   </div>
@@ -1369,6 +1367,64 @@ function saveTopStoriesEdit() {
   refreshTopStoriesSection();
 }
 window.saveTopStoriesEdit = saveTopStoriesEdit;
+
+function showBriefingPromptModal() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  modal.innerHTML = `
+  <div class="modal-overlay" id="bp-modal-overlay">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Generate briefing prompt from examples</div>
+          <div class="modal-sub">Paste 2–5 examples of your past briefings. Curanta will analyze the style and write a prompt that reproduces it.</div>
+        </div>
+        <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
+      </div>
+      <div class="modal-body" style="padding:16px 20px">
+        <textarea id="briefing-examples-input" class="input" rows="10"
+          placeholder="Paste your past briefing lines here, e.g.:&#10;📉 83% of school districts' reading scores declined since 2015 https://…&#10;📈 Fed holds rates at 5.25% for third straight meeting https://…&#10;🏛️ Senate passes $1.2T infrastructure bill 69-30 https://…"
+          style="width:100%;box-sizing:border-box;font-size:12px;line-height:1.7;resize:vertical;margin-bottom:12px"></textarea>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" style="flex:1" data-action="generate-briefing-prompt" id="gen-bp-btn">✨ Generate prompt</button>
+          <button class="btn btn-outline" data-action="close-modal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  modal.querySelector('#bp-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+  modal.querySelector('#briefing-examples-input').focus();
+}
+
+async function generateBriefingPrompt() {
+  const ta = document.getElementById('briefing-examples-input');
+  const examples = ta?.value?.trim();
+  if (!examples) { toast('Paste some example briefing lines first', 'warn'); return; }
+  const btn = document.getElementById('gen-bp-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'briefing-prompt',
+        content: { text: examples },
+        tone: state.tone,
+        brandVoice: state.brandVoice,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    state.newsletter.prompts.topStories = data.result;
+    closeModal();
+    refreshTopStoriesSection();
+    scheduleSave();
+    toast('Briefing prompt generated — tweak it in the prompt field if needed', 'success');
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate prompt'; }
+  }
+}
 
 function renderDropPlaceholder(sectionId) {
   const hints = {
@@ -2361,12 +2417,7 @@ function resetNewsletter() {
     previewText: '',
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
-    prompts: {
-      topStories: '',
-      leadStory: 'Write 300-400 words in a punchy newsletter style. Start with the big takeaway, then use labeled sections: "The details," "Has this been done before?", "The difference," "Why it matters," and "Real talk." Include a source link at the end.',
-      quickHits: 'Write a 60-90 word punchy newsletter blurb. Bold the headline. Be informative and direct. End with a → link.',
-      cta: 'Write a compelling 2-3 sentence call-to-action for newsletter readers to upgrade to Pro or share with a colleague.',
-    },
+    prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
   };
   state.approvalStatus = 'draft';
   state.teamComments = [];

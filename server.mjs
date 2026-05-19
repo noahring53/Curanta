@@ -296,6 +296,9 @@ function mockResponse(action, content, contents = []) {
     'brand-voice': `**Voice profile:** Direct and authoritative with a slight editorial edge. Sentences run short to medium. Vocabulary is professional but accessible — no jargon without explanation. Data and sourcing are prioritized. Tone is confident without being arrogant. Light use of rhetorical questions to create momentum. Signature pattern: lead with the insight, then the supporting evidence. Avoids passive voice. Readers feel informed and slightly ahead of the curve.`,
   };
 
+  if (action === 'briefing-prompt') {
+    return `Lead each line with a single relevant emoji, then the hardest number or most specific fact from the article, followed by brief context. End each line with the source URL as plain text. Keep each line under 120 characters before the URL. No bullets, no intro text, no Sources line.`;
+  }
   return mocks[action] || mocks['rewrite'];
 }
 
@@ -361,6 +364,10 @@ app.post('/api/ai', async (req, res) => {
     cta: {
       system: `${toneDesc}${voiceNote}\n\nYou write newsletter calls-to-action. 2-3 sentences max. Drive upgrades, shares, or engagement. Specific and action-oriented.`,
       user: customPrompt || `Write a CTA for newsletter readers to upgrade to Pro or share with a colleague.`,
+    },
+    'briefing-prompt': {
+      system: `You analyze newsletter briefing examples and write a concise instruction prompt (2-4 sentences max) that captures the style so an AI can reproduce it. Focus on: format pattern, what comes first (stat, emoji, context), tone, URL placement, line length, and any distinctive patterns. Return ONLY the prompt text — no explanation, no preamble, no quotes around it.`,
+      user: `Analyze these briefing examples and write a prompt that would reproduce this exact style:\n\n${content.text || content.summary}`,
     },
     'brand-voice': {
       system: `You are a brand strategist and writing coach. Analyze newsletter writing samples and produce a concise brand voice profile (under 200 words). Describe: tone, sentence structure, vocabulary level, use of humor/data/opinion, and signature patterns.`,
