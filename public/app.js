@@ -36,16 +36,9 @@ const state = {
   aiLoading: false,
   aiHistory: [],
   aiResult: null,
-  teamComments: [
-    { author: 'Sarah K.', text: 'Lead story is strong. Can we sharpen the Real Talk section?', time: '2h ago' },
-    { author: 'Marcus D.', text: 'Subject line #2 is the winner IMO.', time: '45m ago' },
-  ],
+  teamComments: [],
   approvalStatus: 'draft', // 'draft' | 'review' | 'approved'
-  versions: [
-    { num: 'v3', desc: 'AI rewrote lead story', time: '12m ago' },
-    { num: 'v2', desc: 'Added Quick Hits section', time: '1h ago' },
-    { num: 'v1', desc: 'Initial draft', time: '2h ago' },
-  ],
+  versions: [],
   draggedArticleId: null,
   draggedStory: null,
   hasAI: false,
@@ -211,6 +204,7 @@ function handleClick(e) {
     case 'cancel-story-edit': cancelStoryEdit(d.articleId, d.section); break;
     case 'insert-image':    showImageModal(d.articleId, d.section); break;
     case 'duplicate-newsletter': duplicateNewsletter(d.id); break;
+    case 'delete-newsletter':   deleteNewsletter(d.id); break;
     case 'switch-panel':    switchPanel(d.panel); break;
     case 'select-tone':     selectTone(d.tone); break;
     case 'ai-rewrite':      aiRewriteSelection(); break;
@@ -727,6 +721,7 @@ function renderDashboard() {
                 ${nl.clickRate ? `<div class="newsletter-stat"><strong>${nl.clickRate}%</strong> click</div>` : ''}
                 ${nl.scheduledFor ? `<div class="newsletter-stat">Sends ${new Date(nl.scheduledFor).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
                 <button class="btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;margin-left:4px" data-action="duplicate-newsletter" data-id="${nl.id}" title="Duplicate">⊕</button>
+                <button class="btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--red)" data-action="delete-newsletter" data-id="${nl.id}" title="Delete">🗑</button>
               </div>
             </div>
           </div>`).join('')}
@@ -996,9 +991,8 @@ function renderBuilder() {
     </div>
     <div class="builder-topbar-right">
       <button class="btn btn-ghost btn-sm" data-action="show-preview">⊙ Preview</button>
-      <button class="btn btn-outline btn-sm" data-action="copy-html">⎘ Copy HTML</button>
       <button class="btn btn-outline btn-sm" data-action="export-json">↓ JSON</button>
-      <button class="btn btn-primary btn-sm" onclick="mockPublish()">Publish ↗</button>
+      <button class="btn btn-primary btn-sm" data-action="copy-html">⎘ Copy HTML</button>
     </div>
   </header>
 
@@ -1802,6 +1796,24 @@ async function duplicateNewsletter(id) {
   render();
 }
 
+async function deleteNewsletter(id) {
+  const nl = state.dbNewsletters.find(n => n.id === id);
+  const name = nl?.title || 'this newsletter';
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  if (!sb || !state.user) {
+    // No Supabase — remove from local list only
+    state.dbNewsletters = state.dbNewsletters.filter(n => n.id !== id);
+    render();
+    toast('Newsletter removed', 'info');
+    return;
+  }
+  const { error } = await sb.from('newsletters').delete().eq('id', id).eq('user_id', state.user.id);
+  if (error) { toast('Delete failed — ' + error.message, 'error'); return; }
+  toast('Newsletter deleted', 'info');
+  state.dbNewsletters = await loadNewslettersFromDB();
+  render();
+}
+
 async function applyPrompt(sectionId) {
   const articles = state.newsletter.sections[sectionId];
   if (!articles.length) { toast('No articles in this section yet', 'warn'); return; }
@@ -2440,11 +2452,6 @@ function mockSync(platform) {
   setTimeout(() => toast(`✓ Synced to ${platform} successfully`, 'success'), 1800);
 }
 
-function mockPublish() {
-  toast('Preparing to publish…', 'info');
-  setTimeout(() => toast('✓ Newsletter published successfully', 'success'), 2000);
-}
-window.mockPublish = mockPublish;
 
 // ── CUSTOM SECTIONS ───────────────────────────────────────────────────────────
 function showAddSectionModal() {
