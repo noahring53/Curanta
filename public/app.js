@@ -1261,12 +1261,17 @@ function renderTopStoriesSection() {
 
 function formatTopStories(text) {
   if (!text) return '';
-  return escHtml(text)
-    .replace(/^• (.+)$/gm, '<div class="briefing-bullet">• $1</div>')
-    .replace(/^Sources: (.+)$/gm, '<div class="briefing-sources"><strong>Sources:</strong> $1</div>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:var(--accent)">$1</a>')
-    .replace(/\n\n/g, '')
-    .replace(/\n/g, '');
+  return text.split('\n')
+    .filter(line => line.trim())
+    .map(line => {
+      // Convert plain URLs to clickable links
+      const linked = escHtml(line).replace(
+        /https?:\/\/[^\s]+/g,
+        url => `<a href="${url}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:11px">${url}</a>`
+      );
+      return `<div class="briefing-bullet">${linked}</div>`;
+    })
+    .join('');
 }
 
 function renderSection(sectionId, label) {
@@ -2205,11 +2210,9 @@ function buildExportHTML() {
       </td></tr>
       <tr><td style="padding:0 0 24px;border-bottom:1px solid #eee">
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px;line-height:2;color:#1a1a1a">
-          ${topStories.split('\n').map(line => {
-            if (line.startsWith('• ')) return `<div style="padding:2px 0">${escHtml(line).replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" style="color:'+accent+';text-decoration:none">$1</a>')}</div>`;
-            if (line.startsWith('Sources:')) return `<div style="font-size:12px;color:#888;margin-top:6px">${escHtml(line).replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" style="color:#888">$1</a>')}</div>`;
-            return '';
-          }).join('')}
+          ${topStories.split('\n').filter(l => l.trim()).map(line =>
+            `<div style="padding:3px 0">${escHtml(line).replace(/https?:\/\/[^\s]+/g, url => `<a href="${url}" style="color:${accent};font-size:12px;text-decoration:none">${url}</a>`)}</div>`
+          ).join('')}
         </div>
       </td></tr>` : ''}
     ${leads.length > 0 ? `

@@ -372,11 +372,21 @@ app.post('/api/ai', async (req, res) => {
         `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 300)}`
       ).join('\n\n');
       return {
-        system: `You write a "Today's Briefing" section for a newsletter. Format: one bullet per article using • symbol, each on its own line. Pick a single relevant emoji per bullet based on topic (politics 🔴, tech/AI 🤖, business 💼, finance 📈, health 🏥, science 🔬, culture 🎭, sports 🏆, real estate 🏠, history 📅, environment 🌱, world 🌍, law ⚖️, media 📺).
+        system: `You write a "Today's Briefing" section for a newsletter. Format: one line per article, no bullet points.
 
-Each bullet must lead with the single most important number, percentage, dollar figure, or concrete data point from the article — if no hard number exists, use the sharpest specific fact. Pattern: "[Stat or fact] — [one-sentence context]". Examples: "67% of homeowners don't plan to move — highest reading since 2019." or "$2.4B raised — Anthropic's largest round yet, valuing the company at $18.4B." or "8.2M jobs added — beating forecasts by 340K for the third straight month."
+Each line: [emoji] [stat or sharpest fact] [brief context] [source URL]
 
-Never lead with vague statements like "A new report shows" or "Officials announced". Always lead with the number or the sharpest fact. End with a Sources line listing each publication as a markdown link. No intro text, no explanation — just bullets and Sources line.`,
+Rules:
+- Pick one relevant emoji based on topic (📉📈🔴🤖💼🏥🔬🎭🏆🏠📅🌱🌍⚖️📺💰🗳️🏛️)
+- Lead with the single hardest number, percentage, or dollar figure from the article. If no number exists, use the sharpest specific fact.
+- Keep the whole line under 120 characters before the URL
+- End each line with the article's source URL as plain text (not markdown)
+- No intro, no explanation, no Sources line — just the lines
+
+Examples:
+📉 83% of school districts' reading scores declined since 2015 https://example.com/article
+📈 $2.4B raised — Anthropic now valued at $18.4B https://example.com/article
+🗳️ GOP projected to hold 214 seats after redistricting https://example.com/article`,
         user: `Generate a Today's Briefing block for these ${items.length} articles${customPrompt ? `. Additional instructions: ${customPrompt}` : ''}:\n\n${articleList}`,
       };
     })(),
