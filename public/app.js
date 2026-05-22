@@ -1968,24 +1968,12 @@ ${state.aiResult ? `
 </div>` : ''}
 
 <div class="panel-section">
-  <div class="panel-section-title">Brand Voice <button class="btn-ghost btn-sm" style="font-size:10px;padding:2px 6px;float:right;margin-top:-1px" data-action="toggle-voice-panel">▾</button></div>
-  <div id="voice-panel" style="display:none">
-    <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">Add links to past newsletters — we'll pull the text automatically.</div>
-    <form id="voice-url-form" style="margin-bottom:10px">
-      <textarea id="voice-url-input" class="input" rows="2"
-        placeholder="Paste newsletter URLs, one per line…"
-        style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;resize:none;margin-bottom:6px"
-        ${state.voiceUrlLoading ? 'disabled' : ''}></textarea>
-      <button type="submit" class="btn btn-sm btn-primary" style="width:100%" ${state.voiceUrlLoading ? 'disabled' : ''}>${state.voiceUrlLoading ? 'Importing…' : 'Import newsletters'}</button>
-    </form>
-    ${state.voiceUrls?.length ? `<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">${state.voiceUrls.map((u,i) => `<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3)"><span style="color:var(--green)">✓</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(u)}">${escHtml(new URL(u).hostname + new URL(u).pathname.slice(0,30))}</span><button style="background:none;border:none;cursor:pointer;color:var(--text-3);padding:0;font-size:13px;line-height:1" data-action="remove-voice-url" data-idx="${i}">×</button></div>`).join('')}</div>` : ''}
-    <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Or paste text directly:</div>
-    <textarea id="brand-voice-samples" class="input voice-textarea" placeholder="Paste newsletter samples here…" style="min-height:80px">${escHtml(state.brandVoiceSamples)}</textarea>
-    <button class="ai-action-btn" data-action="generate-brand-voice" style="margin-top:6px">
-      <span class="ai-action-icon">🎙</span> Generate voice profile
-    </button>
-    ${state.brandVoice ? `<div class="voice-profile-box" style="margin-top:8px">${escHtml(state.brandVoice)}</div>` : ''}
-  </div>
+  <div class="panel-section-title">Brand Voice</div>
+  ${state.brandVoice
+    ? `<div style="font-size:12px;color:var(--green);margin-bottom:6px">✓ Voice profile active</div>
+       <div style="font-size:11px;color:var(--text-3);line-height:1.6;margin-bottom:8px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">${escHtml(state.brandVoice)}</div>`
+    : `<div style="font-size:12px;color:var(--text-3);margin-bottom:8px;line-height:1.6">No voice profile yet. Add past newsletters in Settings to generate one.</div>`}
+  <button class="btn btn-outline btn-sm" style="width:100%" data-action="navigate" data-view="settings">⚙ Manage in Settings →</button>
 </div>
 
 ${state.aiHistory.length > 0 ? `
@@ -2013,10 +2001,6 @@ function selectTone(tone) {
   refreshAIPanel();
 }
 
-function toggleVoicePanel() {
-  const p = document.getElementById('voice-panel');
-  if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
-}
 
 async function fetchVoiceURL(form) {
   const input = form.querySelector('#voice-url-input');
