@@ -873,42 +873,56 @@ function renderSettingsPage() {
 
       <div class="settings-section">
         <div class="settings-section-title">Brand Voice</div>
-        <div class="settings-section-sub">Paste past newsletters or fetch by URL. Used by AI on every generation.</div>
-        <form id="voice-url-form" style="margin-bottom:12px">
-          <textarea id="voice-url-input" class="input" rows="3"
-            placeholder="Paste one or more newsletter URLs, one per line&#10;https://example.com/issue-47&#10;https://example.com/issue-46"
-            style="width:100%;box-sizing:border-box;resize:vertical;font-size:12px;margin-bottom:8px"
-            ${state.voiceUrlLoading ? 'disabled' : ''}></textarea>
-          <div style="display:flex;align-items:center;gap:10px">
-            <button type="submit" class="btn btn-primary" id="voice-url-btn" ${state.voiceUrlLoading ? 'disabled' : ''}>
-              ${state.voiceUrlLoading ? `Importing… (${state.voiceUrlLoading === true ? '' : state.voiceUrlLoading})` : 'Import newsletters'}
+        <div class="settings-section-sub">Paste your newsletter's homepage or any issue URL — Curanta will read your past issues and build a voice profile automatically. You can edit the result.</div>
+
+        <!-- Step 1: Publication URL -->
+        <div style="margin-top:16px">
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Your newsletter URL</div>
+          <div style="display:flex;gap:8px">
+            <input id="voice-pub-url" class="input" type="url"
+              placeholder="https://yourname.substack.com  or  https://yourdomain.com"
+              style="flex:1" ${state.voiceUrlLoading ? 'disabled' : ''}>
+            <button class="btn btn-primary" id="voice-discover-btn" onclick="discoverVoice()" ${state.voiceUrlLoading ? 'disabled' : ''}>
+              ${state.voiceUrlLoading ? '<span class="spinner"></span> Analyzing…' : '🎙 Analyze'}
             </button>
-            <span style="font-size:11px;color:var(--text-3)">Works with any public newsletter link — Beehiiv, Ghost, Substack, etc.</span>
           </div>
-        </form>
+          <div style="margin-top:6px;font-size:11px;color:var(--text-3)">
+            Works with Substack, Beehiiv, Ghost, WordPress, and any RSS-powered newsletter. We'll read up to 12 past issues.
+          </div>
+        </div>
+
         ${state.voiceUrls?.length ? `
-        <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px">
+        <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px">
           ${state.voiceUrls.map((u, i) => `
-          <div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:6px 10px;background:var(--bg-2);border-radius:var(--r-sm)">
-            <span style="color:var(--green)">✓</span>
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)">${escHtml(u)}</span>
-            <button style="background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;line-height:1;padding:0" data-action="remove-voice-url" data-idx="${i}">×</button>
+          <div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;color:var(--green)">
+            ✓ ${escHtml(new URL(u).hostname)}
+            <button style="background:none;border:none;cursor:pointer;color:var(--green);font-size:13px;line-height:1;padding:0;opacity:0.7" data-action="remove-voice-url" data-idx="${i}">×</button>
           </div>`).join('')}
         </div>` : ''}
-        <textarea id="brand-voice-samples" class="input" rows="5" placeholder="Or paste newsletter samples directly…" style="width:100%;margin-bottom:10px;resize:vertical">${escHtml(state.brandVoiceSamples)}</textarea>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="btn btn-primary" data-action="generate-brand-voice">${state.brandVoice ? '↺ Regenerate voice' : 'Generate voice profile'}</button>
-          ${state.brandVoice ? `<button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear</button>` : ''}
-        </div>
+
+        <!-- Step 2: Voice profile (editable once generated) -->
         ${state.brandVoice ? `
-        <div style="margin-top:16px;border:1.5px solid var(--green);border-radius:var(--r-md);overflow:hidden">
-          <div style="background:var(--green);padding:8px 14px;display:flex;align-items:center;gap:8px">
-            <span style="font-size:13px">🎙</span>
-            <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#fff">Voice Profile — Active</span>
-            <span style="margin-left:auto;font-size:10px;color:rgba(255,255,255,0.75)">Applied to every AI generation</span>
+        <div style="margin-top:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--green)">🎙 Voice Profile — Active</span>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" data-action="generate-brand-voice">↺ Regenerate</button>
+              <button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear</button>
+            </div>
           </div>
-          <div style="padding:14px 16px;background:var(--bg-1);font-size:13px;color:var(--text-1);line-height:1.8;white-space:pre-wrap">${escHtml(state.brandVoice)}</div>
-        </div>` : ''}
+          <textarea id="brand-voice-edit" class="input" rows="8"
+            style="width:100%;resize:vertical;font-size:13px;line-height:1.8;font-family:inherit"
+            oninput="state.brandVoice=this.value;scheduleSettingsSave();refreshVoiceBadge()"
+          >${escHtml(state.brandVoice)}</textarea>
+          <div style="font-size:11px;color:var(--text-3);margin-top:6px">Edit freely — changes save automatically and apply to all future AI generations.</div>
+        </div>` : `
+        <div style="margin-top:16px;padding:20px;border:1px dashed var(--border-md);border-radius:var(--r-md);text-align:center;color:var(--text-3)">
+          <div style="font-size:24px;margin-bottom:8px">🎙</div>
+          <div style="font-size:13px;font-weight:500;color:var(--text-2);margin-bottom:4px">No voice profile yet</div>
+          <div style="font-size:12px">Paste your newsletter URL above and click Analyze to get started.</div>
+        </div>`}
       </div>
 
       <div class="settings-section">
@@ -2001,6 +2015,40 @@ function selectTone(tone) {
   refreshAIPanel();
 }
 
+
+async function discoverVoice() {
+  const input = document.getElementById('voice-pub-url');
+  const url = input?.value.trim();
+  if (!url) { toast('Paste your newsletter URL first', 'warn'); return; }
+  try { new URL(url); } catch { toast('That doesn\'t look like a valid URL', 'warn'); return; }
+
+  state.voiceUrlLoading = true;
+  refreshSettingsVoiceSection();
+  toast('Fetching your past issues…', 'info');
+
+  try {
+    const res = await fetch(`/api/discover-voice?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Discovery failed');
+
+    toast(`Found ${data.count} issues from "${data.source}" — generating voice profile…`, 'info');
+
+    // Track the publication URL
+    if (!state.voiceUrls.includes(url)) state.voiceUrls.push(url);
+    state.brandVoiceSamples = data.text;
+
+    state.voiceUrlLoading = false;
+    await generateBrandVoice();
+    if (input) input.value = '';
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'error');
+    state.voiceUrlLoading = false;
+    refreshSettingsVoiceSection();
+  }
+}
+window.discoverVoice = discoverVoice;
+window.scheduleSettingsSave = scheduleSettingsSave;
+window.refreshVoiceBadge = refreshVoiceBadge;
 
 async function fetchVoiceURL(form) {
   const input = form.querySelector('#voice-url-input');

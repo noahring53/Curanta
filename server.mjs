@@ -202,6 +202,94 @@ app.get('/api/ingest', async (req, res) => {
   }
 });
 
+// ── /api/discover-voice ───────────────────────────────────────────────────────
+// Takes a publication URL (Substack, Beehiiv, Ghost, any RSS-powered newsletter),
+// discovers past issues, fetches their content, and returns combined text for AI.
+app.get('/api/discover-voice', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url required' });
+
+  let base;
+  try { base = new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
+
+  // Common RSS paths to probe — covers Substack, Beehiiv, Ghost, WordPress, etc.
+  const rssAttempts = [
+    url,                             // maybe they pasted the feed URL directly
+    `${base.origin}/feed`,
+    `${base.origin}/feed.xml`,
+    `${base.origin}/rss`,
+    `${base.origin}/rss.xml`,
+    `${base.origin}/rss/`,
+    `${base.origin}/atom.xml`,
+    `${base.origin}/index.xml`,
+  ];
+
+  let feed = null;
+  for (const attempt of rssAttempts) {
+    try { feed = await rssParser.parseURL(attempt); if (feed?.items?.length) break; }
+    catch { /* try next */ }
+  }
+
+  // If none of the probes worked, try scraping <link rel="alternate"> from the page
+  if (!feed?.items?.length) {
+    try {
+      const html = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Curanta/1.0)' },
+        signal: AbortSignal.timeout(10000),
+      }).then(r => r.text());
+      const $ = load(html);
+      const rssHref = $('link[type="application/rss+xml"], link[type="application/atom+xml"]').first().attr('href');
+      if (rssHref) {
+        const resolved = new URL(rssHref, url).href;
+        feed = await rssParser.parseURL(resolved);
+      }
+    } catch { /* give up */ }
+  }
+
+  if (!feed?.items?.length) {
+    return res.status(404).json({
+      error: 'Could not find newsletter issues at that URL. Try pasting your RSS feed URL directly (e.g. yoursite.com/feed).',
+    });
+  }
+
+  // Grab up to 12 most recent issues
+  const items = feed.items.slice(0, 12);
+
+  const results = await Promise.allSettled(items.map(async item => {
+    // Many platforms embed full content in RSS (Substack, Beehiiv free tiers)
+    const rssBody = stripHtml(item['content:encoded'] || item.content || '').replace(/\s+/g, ' ').trim();
+    if (rssBody.length > 600) {
+      return { title: item.title || 'Untitled', text: rssBody.slice(0, 5000) };
+    }
+    // Fall back to fetching the article page
+    if (item.link) {
+      try {
+        const art = await fetchArticle(item.link);
+        return { title: item.title || art.title, text: art.text };
+      } catch { /* use rss snippet */ }
+    }
+    return rssBody.length > 100 ? { title: item.title || 'Untitled', text: rssBody } : null;
+  }));
+
+  const issues = results
+    .filter(r => r.status === 'fulfilled' && r.value?.text?.length > 100)
+    .map(r => r.value);
+
+  if (!issues.length) {
+    return res.status(404).json({ error: 'Found issues but could not extract readable content. The newsletter may be paywalled.' });
+  }
+
+  const combined = issues
+    .map((iss, i) => `=== Issue ${i + 1}: ${iss.title} ===\n${iss.text}`)
+    .join('\n\n');
+
+  res.json({
+    count: issues.length,
+    source: feed.title || base.hostname,
+    text: combined,
+  });
+});
+
 // ── AI tone descriptions ──────────────────────────────────────────────────────
 const TONES = {
   'punchy-executive': 'You write like a sharp, no-fluff executive newsletter. Direct, confident, data-informed. Short sentences. No padding.',
@@ -370,8 +458,8 @@ app.post('/api/ai', async (req, res) => {
       user: `Analyze these briefing examples and write a prompt that would reproduce this exact style:\n\n${content.text || content.summary}`,
     },
     'brand-voice': {
-      system: `You are a brand strategist and writing coach. Analyze newsletter writing samples and produce a concise brand voice profile (under 200 words). Describe: tone, sentence structure, vocabulary level, use of humor/data/opinion, and signature patterns.`,
-      user: `Analyze these newsletter samples and create a brand voice profile:\n\n${content.text || content.summary}`,
+      system: `You are a brand strategist and writing coach. Analyze multiple newsletter issues and produce a detailed but concise brand voice profile (150-250 words) the writer can reference and edit. Structure it as a paragraph or two covering: overall tone and personality, sentence length and rhythm, vocabulary and formality level, how they use data/opinion/humor, how they open and close pieces, any signature phrases or structural patterns, and what makes their voice distinctly theirs. Be specific — quote short phrases or patterns from the samples where possible. Write it as instructions for an AI to reproduce the voice, not as a critique.`,
+      user: `Analyze these newsletter issues and create a brand voice profile:\n\n${content.text || content.summary}`,
     },
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
