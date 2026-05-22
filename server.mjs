@@ -10,9 +10,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
 const rssParser = new Parser({
-  timeout: 12000,
-  headers: { 'User-Agent': 'Curanta/1.0 RSS Reader' },
+  timeout: 15000,
+  headers: {
+    'User-Agent': BROWSER_UA,
+    'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+  },
 });
 
 const anthropic = process.env.ANTHROPIC_API_KEY
@@ -203,8 +209,6 @@ app.get('/api/ingest', async (req, res) => {
 });
 
 // ── /api/discover-voice ───────────────────────────────────────────────────────
-// Takes a publication URL (Substack, Beehiiv, Ghost, any RSS-powered newsletter),
-// discovers past issues, fetches their content, and returns combined text for AI.
 app.get('/api/discover-voice', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'url required' });
@@ -212,30 +216,38 @@ app.get('/api/discover-voice', async (req, res) => {
   let base;
   try { base = new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
 
-  // Common RSS paths to probe — covers Substack, Beehiiv, Ghost, WordPress, etc.
+  // Always probe the origin, even if they pasted a specific post URL
+  const origin = base.origin;
+
+  // Ordered probe list — most likely first per platform
+  // Beehiiv: /feed  Substack: /feed  Ghost: /rss/  WordPress: /feed
   const rssAttempts = [
-    url,                             // maybe they pasted the feed URL directly
-    `${base.origin}/feed`,
-    `${base.origin}/feed.xml`,
-    `${base.origin}/rss`,
-    `${base.origin}/rss.xml`,
-    `${base.origin}/rss/`,
-    `${base.origin}/atom.xml`,
-    `${base.origin}/index.xml`,
+    url,                        // maybe they pasted the feed URL itself
+    `${origin}/feed`,
+    `${origin}/rss`,
+    `${origin}/feed.xml`,
+    `${origin}/rss.xml`,
+    `${origin}/rss/`,
+    `${origin}/atom.xml`,
+    `${origin}/index.xml`,
+    `${origin}/?feed=rss2`,     // WordPress fallback
+    `${origin}/feeds/posts/default`, // Blogger
   ];
 
   let feed = null;
   for (const attempt of rssAttempts) {
-    try { feed = await rssParser.parseURL(attempt); if (feed?.items?.length) break; }
-    catch { /* try next */ }
+    try {
+      feed = await rssParser.parseURL(attempt);
+      if (feed?.items?.length) break;
+    } catch { /* try next */ }
   }
 
-  // If none of the probes worked, try scraping <link rel="alternate"> from the page
+  // Fallback 1: scrape <link rel="alternate"> from the page HTML
   if (!feed?.items?.length) {
     try {
       const html = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Curanta/1.0)' },
-        signal: AbortSignal.timeout(10000),
+        headers: { 'User-Agent': BROWSER_UA, 'Accept': 'text/html' },
+        signal: AbortSignal.timeout(12000),
       }).then(r => r.text());
       const $ = load(html);
       const rssHref = $('link[type="application/rss+xml"], link[type="application/atom+xml"]').first().attr('href');
@@ -243,20 +255,50 @@ app.get('/api/discover-voice', async (req, res) => {
         const resolved = new URL(rssHref, url).href;
         feed = await rssParser.parseURL(resolved);
       }
+
+      // Fallback 2: if still no RSS, scrape post links directly from the page
+      if (!feed?.items?.length) {
+        const postLinks = [];
+        $('a[href]').each((_, el) => {
+          const href = $(el).attr('href');
+          if (!href) return;
+          try {
+            const full = new URL(href, url).href;
+            // Only keep links on the same domain that look like posts
+            if (
+              full.startsWith(origin) &&
+              full !== origin && full !== origin + '/' &&
+              !full.includes('#') &&
+              (full.includes('/p/') || full.includes('/post/') || full.includes('/archive/') ||
+               full.includes('/issues/') || full.includes('/newsletter/') ||
+               /\/[a-z0-9-]{10,}$/.test(new URL(full).pathname))
+            ) {
+              if (!postLinks.includes(full)) postLinks.push(full);
+            }
+          } catch { /* bad href */ }
+        });
+
+        if (postLinks.length >= 2) {
+          // Treat scraped links as synthetic feed items
+          feed = {
+            title: base.hostname,
+            items: postLinks.slice(0, 10).map(link => ({ link, title: link })),
+          };
+        }
+      }
     } catch { /* give up */ }
   }
 
   if (!feed?.items?.length) {
     return res.status(404).json({
-      error: 'Could not find newsletter issues at that URL. Try pasting your RSS feed URL directly (e.g. yoursite.com/feed).',
+      error: 'Could not find past issues at that URL. Try pasting your RSS feed URL directly — for Beehiiv it\'s yourpub.beehiiv.com/feed, for Substack it\'s yourname.substack.com/feed.',
     });
   }
 
-  // Grab up to 12 most recent issues
+  // Extract content from each issue
   const items = feed.items.slice(0, 12);
-
   const results = await Promise.allSettled(items.map(async item => {
-    // Many platforms embed full content in RSS (Substack, Beehiiv free tiers)
+    // Prefer full content embedded in RSS (Substack/Beehiiv include this)
     const rssBody = stripHtml(item['content:encoded'] || item.content || '').replace(/\s+/g, ' ').trim();
     if (rssBody.length > 600) {
       return { title: item.title || 'Untitled', text: rssBody.slice(0, 5000) };
@@ -265,8 +307,8 @@ app.get('/api/discover-voice', async (req, res) => {
     if (item.link) {
       try {
         const art = await fetchArticle(item.link);
-        return { title: item.title || art.title, text: art.text };
-      } catch { /* use rss snippet */ }
+        if (art.text?.length > 200) return { title: item.title || art.title, text: art.text };
+      } catch { /* use snippet */ }
     }
     return rssBody.length > 100 ? { title: item.title || 'Untitled', text: rssBody } : null;
   }));
@@ -276,18 +318,16 @@ app.get('/api/discover-voice', async (req, res) => {
     .map(r => r.value);
 
   if (!issues.length) {
-    return res.status(404).json({ error: 'Found issues but could not extract readable content. The newsletter may be paywalled.' });
+    return res.status(404).json({
+      error: 'Found issues but could not extract content — the newsletter may be behind a paywall.',
+    });
   }
 
   const combined = issues
     .map((iss, i) => `=== Issue ${i + 1}: ${iss.title} ===\n${iss.text}`)
     .join('\n\n');
 
-  res.json({
-    count: issues.length,
-    source: feed.title || base.hostname,
-    text: combined,
-  });
+  res.json({ count: issues.length, source: feed.title || base.hostname, text: combined });
 });
 
 // ── AI tone descriptions ──────────────────────────────────────────────────────
