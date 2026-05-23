@@ -842,6 +842,20 @@ function renderDashboard() {
         </div>
       </div>
 
+      ${state.dbNewsletters.length === 0 ? `
+      <div class="onboard-banner animate-in">
+        <div class="onboard-banner-text">
+          <div class="onboard-banner-title">Welcome to Curanta 👋</div>
+          <div class="onboard-banner-sub">You're set up. Here's how to publish your first newsletter in under 15 minutes:</div>
+          <div class="onboard-steps">
+            <div class="onboard-step"><div class="onboard-num">1</div><div><strong>Add a source</strong> — paste an RSS feed URL or any article link in the builder's Sources panel.</div></div>
+            <div class="onboard-step"><div class="onboard-num">2</div><div><strong>Drag &amp; drop</strong> — pull articles into your Lead Story and Quick Hits sections.</div></div>
+            <div class="onboard-step"><div class="onboard-num">3</div><div><strong>Hit Apply</strong> — AI writes everything in your voice. Copy the HTML and paste into Beehiiv, Substack, or Mailchimp.</div></div>
+          </div>
+        </div>
+        <button class="btn btn-primary" style="flex-shrink:0;align-self:flex-start" data-action="open-builder">Create your first newsletter →</button>
+      </div>` : ''}
+
       <div>
         <div class="dash-section-title">
           Newsletters
@@ -852,7 +866,7 @@ function renderDashboard() {
             <div class="new-newsletter-icon">+</div>
             <div class="new-newsletter-label">New Newsletter</div>
           </div>
-          ${(state.dbNewsletters.length ? state.dbNewsletters : mockNewsletters).map((nl, i) => `
+          ${state.dbNewsletters.length === 0 ? '' : state.dbNewsletters.map((nl, i) => `
           <div class="newsletter-card animate-in animate-in-d${Math.min(i+1,5)}" data-action="open-newsletter" data-id="${nl.id}">
             <div style="flex:1;min-width:0">
               <div class="newsletter-card-title">${escHtml(nl.title)}</div>

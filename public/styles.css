@@ -658,6 +658,23 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .empty-state { text-align: center; padding: 60px 20px; color: var(--text-3); }
 .empty-state-title { font-size: 15px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
 .empty-state-sub { font-size: 13px; }
+
+/* Onboarding banner (new users) */
+.onboard-banner {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+  padding: 24px 28px; border-radius: var(--r-lg);
+  background: linear-gradient(135deg, var(--accent-soft) 0%, rgba(192,132,252,0.08) 100%);
+  border: 1px solid var(--accent); flex-wrap: wrap;
+}
+.onboard-banner-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.onboard-banner-sub { font-size: 13px; color: var(--text-2); margin-bottom: 16px; }
+.onboard-steps { display: flex; flex-direction: column; gap: 10px; }
+.onboard-step { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.onboard-step strong { color: var(--text-1); }
+.onboard-num {
+  width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px;
+}
 .settings-section { margin-bottom: 32px; padding-bottom: 32px; border-bottom: 1px solid var(--border); }
 .settings-section:last-child { border-bottom: none; }
 .settings-section-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
