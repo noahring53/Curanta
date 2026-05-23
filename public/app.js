@@ -10,6 +10,7 @@ const state = {
     title: 'Untitled Newsletter',
     subject: '',
     previewText: '',
+    subjectLines: [],
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
     prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
@@ -165,6 +166,11 @@ async function init() {
     history.replaceState(null, '', window.location.pathname);
     toast('Checkout cancelled — you can subscribe anytime from Settings.', 'info');
   }
+  if (urlParams.get('reset') === 'true') {
+    history.replaceState(null, '', window.location.pathname);
+    // Supabase sets the session from the reset token in the URL hash automatically
+    setTimeout(() => showUpdatePasswordModal(), 300);
+  }
 }
 
 // ── ROUTER ────────────────────────────────────────────────────────────────────
@@ -233,6 +239,8 @@ function handleClick(e) {
     case 'open-builder':    navigate('builder'); break;
     case 'open-newsletter': navigate('builder', { id: d.id }); break;
     case 'show-auth':       showAuthModal(d.tab || 'login'); break;
+    case 'forgot-password': showForgotPasswordForm(); break;
+    case 'use-subject':     useSubjectLine(d.line); break;
     case 'close-modal':     closeModal(); break;
     case 'auth-tab':        switchAuthTab(d.tab); break;
     case 'logout':          handleLogout(); break;
@@ -723,6 +731,7 @@ function showAuthModal(tab = 'login') {
               <input id="login-password" name="password" type="password" class="input" placeholder="••••••••" required autocomplete="current-password">
             </div>
             <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Sign in →</button>
+            <button type="button" class="btn-ghost" style="font-size:12px;color:var(--text-3);width:100%;text-align:center;padding:6px;margin-top:4px" data-action="forgot-password">Forgot password?</button>
           </form>
           <div style="margin:14px 0">
             <div class="auth-divider">or</div>
@@ -762,6 +771,91 @@ function switchAuthTab(tab) {
   document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   document.getElementById('auth-panel-login').style.display = tab === 'login' ? 'block' : 'none';
   document.getElementById('auth-panel-signup').style.display = tab === 'signup' ? 'block' : 'none';
+}
+
+function showForgotPasswordForm() {
+  const panel = document.getElementById('auth-panel-login');
+  if (!panel) return;
+  panel.innerHTML = `
+    <div style="margin-bottom:16px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px">Reset your password</div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.5">Enter your email and we'll send you a link to set a new password.</div>
+    </div>
+    <form id="reset-form" class="auth-form">
+      <div id="reset-msg" class="auth-error hidden"></div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input id="reset-email" type="email" class="input" placeholder="you@example.com" required autocomplete="email">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Send reset link →</button>
+      <button type="button" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:6px;font-size:12px" data-action="auth-tab" data-tab="login">← Back to sign in</button>
+    </form>`;
+  document.getElementById('reset-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('reset-email')?.value?.trim();
+    const msgEl = document.getElementById('reset-msg');
+    if (!email || !sb) return;
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + '/?reset=true',
+      });
+      if (error) throw error;
+      msgEl.classList.remove('hidden');
+      msgEl.style.cssText = 'color:var(--green);background:var(--green-soft);border-color:rgba(52,211,153,0.3)';
+      msgEl.textContent = '✓ Reset link sent — check your inbox (and spam folder).';
+      btn.style.display = 'none';
+    } catch (err) {
+      msgEl.classList.remove('hidden');
+      msgEl.textContent = err.message;
+      btn.disabled = false; btn.textContent = 'Send reset link →';
+    }
+  });
+}
+
+function showUpdatePasswordModal() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Set new password</div>
+          <div class="modal-sub">Choose a new password for your account.</div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <form id="update-pass-form" class="auth-form">
+          <div id="update-pass-msg" class="auth-error hidden"></div>
+          <div class="form-group">
+            <label class="form-label">New password</label>
+            <input id="new-password" type="password" class="input" placeholder="Min. 8 characters" minlength="8" required autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Update password →</button>
+        </form>
+      </div>
+    </div>
+  </div>`;
+  document.getElementById('update-pass-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pass = document.getElementById('new-password')?.value;
+    const msgEl = document.getElementById('update-pass-msg');
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Updating…';
+    try {
+      const { error } = await sb.auth.updateUser({ password: pass });
+      if (error) throw error;
+      closeModal();
+      toast('✓ Password updated — you\'re now signed in.', 'success');
+      navigate('dashboard');
+    } catch (err) {
+      msgEl.classList.remove('hidden');
+      msgEl.textContent = err.message;
+      btn.disabled = false; btn.textContent = 'Update password →';
+    }
+  });
 }
 
 async function submitAuth(form) {
@@ -813,6 +907,7 @@ function renderDashboard() {
 <div class="app-shell">
   ${renderAppNav('dashboard')}
   <div class="app-main">
+    ${renderTrialBanner()}
     <div class="app-topbar">
       <div class="page-title">Dashboard</div>
       <div class="flex items-center gap-2">
@@ -941,6 +1036,7 @@ function renderSourcesPage() {
 <div class="app-shell">
   ${renderAppNav('sources')}
   <div class="app-main">
+    ${renderTrialBanner()}
     <div class="app-topbar">
       <div>
         <div class="page-title">Sources</div>
@@ -1020,6 +1116,7 @@ function renderSubscriptionPage() {
 <div class="app-shell">
   ${renderAppNav('subscription')}
   <div class="app-main">
+    ${renderTrialBanner()}
     <div class="app-topbar">
       <div>
         <div class="page-title">Subscription</div>
@@ -1087,6 +1184,7 @@ function renderPublicationsPage() {
 <div class="app-shell">
   ${renderAppNav('publications')}
   <div class="app-main">
+    ${renderTrialBanner()}
     <div class="app-topbar">
       <div class="page-title">Publications</div>
     </div>
@@ -1163,6 +1261,7 @@ function renderSettingsPage() {
 <div class="app-shell">
   ${renderAppNav('settings')}
   <div class="app-main">
+    ${renderTrialBanner()}
     <div class="app-topbar">
       <div>
         <div class="page-title">Settings</div>
@@ -2370,6 +2469,16 @@ function renderAIPanel() {
   <button class="ai-action-btn" data-action="generate-subjects" ${state.aiLoading ? 'disabled' : ''}>
     ${state.aiLoading ? '<div class="spinner"></div>' : '<span class="ai-action-icon">✉</span>'} Generate subject lines
   </button>
+  ${(state.newsletter.subjectLines || []).length > 0 ? `
+  <div class="subject-history">
+    ${state.newsletter.subjectLines.slice(0, 10).map((line, i) => `
+    <div class="subject-history-item ${state.newsletter.subject === line ? 'active' : ''}">
+      <div class="subject-history-text">${escHtml(line)}</div>
+      <button class="subject-use-btn" data-action="use-subject" data-line="${escHtml(line)}" title="Use this subject line">
+        ${state.newsletter.subject === line ? '✓' : 'Use'}
+      </button>
+    </div>`).join('')}
+  </div>` : ''}
 </div>
 
 <div class="panel-section">
@@ -2411,6 +2520,15 @@ ${state.aiHistory.length > 0 ? `
 function refreshAIPanel() {
   const body = document.getElementById('panel-body');
   if (body && state.rightPanel === 'ai') body.innerHTML = renderAIPanel();
+}
+
+function useSubjectLine(line) {
+  state.newsletter.subject = line;
+  const input = document.getElementById('subject-input');
+  if (input) input.value = line;
+  scheduleSave();
+  refreshAIPanel();
+  toast('Subject line applied', 'success');
 }
 
 function selectTone(tone) {
@@ -2563,6 +2681,16 @@ async function generateSubjectLines() {
   try {
     state.aiResult = await callAI('subject-line', content);
     addToHistory('subject-line', state.aiResult);
+    // Parse numbered list into individual subject lines and prepend to history
+    const parsed = state.aiResult
+      .split('\n')
+      .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())
+      .filter(l => l.length > 10);
+    if (parsed.length) {
+      if (!state.newsletter.subjectLines) state.newsletter.subjectLines = [];
+      state.newsletter.subjectLines = [...parsed, ...state.newsletter.subjectLines].slice(0, 20);
+      scheduleSave();
+    }
   } catch (e) { toast(e.message, 'error'); }
   state.aiLoading = false; refreshAIPanel();
 }
@@ -3212,13 +3340,32 @@ async function manageBilling() {
 window.manageBilling = manageBilling;
 
 function isSubscribed() {
-  return state.grandfathered || state.subscriptionStatus === 'active' || state.subscriptionStatus === 'trialing';
+  return state.grandfathered || ['active', 'trialing', 'past_due'].includes(state.subscriptionStatus);
 }
 
 function trialDaysLeft() {
   if (!state.trialEndsAt) return null;
   const ms = new Date(state.trialEndsAt) - Date.now();
   return Math.max(0, Math.ceil(ms / 86400000));
+}
+
+function renderTrialBanner() {
+  if (state.subscriptionStatus === 'past_due') {
+    return `<div class="trial-banner" style="border-color:var(--red);color:var(--red);background:var(--red-soft)">
+      <span>⚠️ <strong>Payment failed.</strong> Update your payment method to keep access.</span>
+      <button class="btn btn-sm" style="background:var(--red);color:#fff;flex-shrink:0" data-action="manage-billing">Update payment →</button>
+    </div>`;
+  }
+  if (state.subscriptionStatus !== 'trialing') return '';
+  const days = trialDaysLeft();
+  if (days === null || days > 3) return '';
+  const urgency = days === 0 ? 'var(--red)' : days === 1 ? 'var(--amber)' : 'var(--accent)';
+  const msg = days === 0 ? 'Your free trial ends <strong>today</strong>.'
+    : `Your free trial ends in <strong>${days} day${days === 1 ? '' : 's'}</strong>.`;
+  return `<div class="trial-banner" style="border-color:${urgency};color:${urgency}">
+    <span>⏳ ${msg} After that you'll be charged $49/mo.</span>
+    <button class="btn btn-sm" style="background:${urgency};color:#fff;flex-shrink:0" data-action="navigate" data-view="subscription">Manage →</button>
+  </div>`;
 }
 
 // Auto-save debounce
@@ -3246,6 +3393,7 @@ async function saveNewsletter() {
     title: state.newsletter.title,
     subject: state.newsletter.subject,
     preview_text: state.newsletter.previewText,
+    subject_lines: state.newsletter.subjectLines || [],
     sections: {
       ...state.newsletter.sections,
       __order: state.newsletter.sectionOrder,
@@ -3296,9 +3444,10 @@ async function loadBuilderData(newsletterId) {
   const { data: nl, error } = await sb.from('newsletters').select('*').eq('id', newsletterId).single();
   if (error || !nl) { console.error('Load newsletter error:', error); return; }
   state.newsletterId = nl.id;
-  state.newsletter.title       = nl.title        || 'Untitled Newsletter';
-  state.newsletter.subject     = nl.subject       || '';
-  state.newsletter.previewText = nl.preview_text  || '';
+  state.newsletter.title        = nl.title        || 'Untitled Newsletter';
+  state.newsletter.subject      = nl.subject       || '';
+  state.newsletter.previewText  = nl.preview_text  || '';
+  state.newsletter.subjectLines = nl.subject_lines || [];
   const raw = nl.sections || {};
   state.newsletter.sectionOrder = raw.__order || ['topStories', 'leadStory', 'quickHits', 'cta'];
   state.newsletter.sectionMeta  = raw.__meta  || {
@@ -3323,6 +3472,7 @@ function resetNewsletter() {
     title: 'Untitled Newsletter',
     subject: '',
     previewText: '',
+    subjectLines: [],
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
     prompts: {

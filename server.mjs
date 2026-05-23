@@ -105,6 +105,25 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         subscription_status: 'inactive',
         trial_ends_at: null,
       }, true);
+    } else if (event.type === 'customer.subscription.trial_will_end') {
+      // Trial ends in 3 days — store a flag so the app can show an in-app banner.
+      // For email notifications, enable "Upcoming renewal reminders" in Stripe Dashboard
+      // → Settings → Billing → Subscriptions and emails.
+      await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(obj.customer)}`, {
+        trial_ends_at: obj.trial_end
+          ? new Date(obj.trial_end * 1000).toISOString()
+          : null,
+      }, true);
+    } else if (event.type === 'invoice.payment_failed') {
+      // Payment failed — mark subscription as past_due so app can surface a warning.
+      // Stripe's own dunning emails handle retry notifications automatically if enabled
+      // in Dashboard → Settings → Billing → Subscriptions and emails.
+      const customerId = obj.customer;
+      if (customerId) {
+        await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(customerId)}`, {
+          subscription_status: 'past_due',
+        }, true);
+      }
     }
   } catch (err) {
     console.error('Webhook handler error:', err.message);
@@ -598,7 +617,7 @@ app.post('/api/ai', async (req, res) => {
     try {
       const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
       if (settings) {
-        const allowed = settings.grandfathered || settings.subscription_status === 'active';
+        const allowed = settings.grandfathered || ['active', 'trialing', 'past_due'].includes(settings.subscription_status);
         if (!allowed) {
           return res.status(402).json({ error: 'subscription_required' });
         }
