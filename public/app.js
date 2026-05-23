@@ -52,6 +52,7 @@ const state = {
   hasAI: false,
   voiceUrls: [],
   voiceUrlLoading: false,
+  _expandedPrompts: {},     // transient: which section prompt boxes are open
   // Persistence
   newsletterId: null,       // UUID of the current newsletter in Supabase
   saving: false,
@@ -260,6 +261,7 @@ function handleClick(e) {
     case 'confirm-add-section': confirmAddSection(); break;
     case 'fetch-briefing-examples': fetchBriefingExamples(); break;
     case 'settings-tab': switchSettingsTab(d.tab); break;
+    case 'toggle-section-prompt': toggleSectionPrompt(d.sectionId); break;
   }
 }
 
@@ -866,6 +868,13 @@ function renderSourcesPage() {
 </div>`;
 }
 
+function toggleSectionPrompt(sectionId) {
+  if (!state._expandedPrompts) state._expandedPrompts = {};
+  state._expandedPrompts[sectionId] = !state._expandedPrompts[sectionId];
+  const sectionsEl = document.getElementById('editor-sections');
+  if (sectionsEl) { sectionsEl.innerHTML = renderEditorSections(); setupDropZones(); }
+}
+
 // ── SETTINGS PAGE ─────────────────────────────────────────────────────────────
 function switchSettingsTab(tab) {
   state.settingsTab = tab;
@@ -1361,6 +1370,8 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
   const articles = state.newsletter.sections[sectionId] || [];
   const content  = state.newsletter.topStoriesContent;
   const canRemove = state.newsletter.sectionOrder.length > 1;
+  const promptOpen = !!(state._expandedPrompts?.[sectionId]);
+  const hasCustomPrompt = !!(state.newsletter.prompts[sectionId]);
   return `
 <div class="editor-section" id="section-${sectionId}" draggable="true"
   ondragstart="sectionDragStart(event,'${sectionId}')"
@@ -1371,8 +1382,11 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(sectionName)}</span>
     <div class="section-prompt-wrap" style="gap:6px">
-      <input class="section-prompt" data-section="${sectionId}" value="${escHtml(state.newsletter.prompts[sectionId] || '')}" placeholder="Optional style instructions…" style="font-size:11px">
-      <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
+      ${promptOpen ? `
+        <input class="section-prompt" data-section="${sectionId}" value="${escHtml(state.newsletter.prompts[sectionId] || '')}" placeholder="Optional style instructions…" style="font-size:11px">
+        <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
+      ` : ''}
+      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
     </div>
@@ -1427,6 +1441,8 @@ function renderSection(sectionId, label, type = 'hits') {
   const prompt = state.newsletter.prompts[sectionId] || '';
   const isGrid = type === 'hits' || type === 'generic';
   const canRemove = state.newsletter.sectionOrder.length > 1;
+  const promptOpen = !!(state._expandedPrompts?.[sectionId]);
+  const hasCustomPrompt = !!prompt;
   return `
 <div class="editor-section" id="section-${sectionId}" draggable="true"
   ondragstart="sectionDragStart(event,'${sectionId}')"
@@ -1437,7 +1453,8 @@ function renderSection(sectionId, label, type = 'hits') {
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
     <div class="section-prompt-wrap">
-      <input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt…">
+      ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt for this issue…">` : ''}
+      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}">▶ Apply</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
     </div>

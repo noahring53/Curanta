@@ -802,6 +802,10 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
   transition: border-color 0.15s;
 }
 .section-prompt:focus { border-color: var(--accent); color: var(--text-1); }
+.section-prompt-toggle { font-size: 12px; padding: 3px 7px; opacity: 0.5; transition: opacity 0.15s, color 0.15s, background 0.15s; }
+.section-prompt-toggle:hover { opacity: 1; }
+.section-prompt-toggle.active { opacity: 1; color: var(--accent); background: var(--accent-soft); }
+.section-prompt-toggle.has-value { opacity: 0.85; color: var(--accent); }
 .section-drop-zone { min-height: 80px; transition: background 0.15s; }
 .section-drop-zone.drag-over { background: var(--accent-soft); }
 .section-content { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
