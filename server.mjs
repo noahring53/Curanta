@@ -447,13 +447,14 @@ app.post('/api/ai', async (req, res) => {
 
   const toneDesc = TONES[tone] || TONES['punchy-executive'];
   const voiceNote = brandVoice
-    ? `\n\nBrand voice profile to match:\n${brandVoice}`
+    ? `\n\nCRITICAL — Brand voice to match exactly:\n${brandVoice}\nThis voice profile overrides default style. Write as if you ARE this writer.`
     : '';
 
+  // Give lead stories more source material
   const articleContext = [
     content.title ? `Title: ${content.title}` : '',
     content.summary ? `Summary: ${content.summary}` : '',
-    content.text ? `Full text:\n${content.text.slice(0, 3000)}` : '',
+    content.text ? `Full text:\n${content.text.slice(0, 6000)}` : '',
     content.url ? `URL: ${content.url}` : '',
     content.source ? `Source: ${content.source}` : '',
   ]
@@ -462,36 +463,90 @@ app.post('/api/ai', async (req, res) => {
 
   const prompts = {
     'lead-story': {
-      system: `${toneDesc}${voiceNote}\n\nYou write newsletter lead stories. Always use this exact structure with these bold labels:\n[Opening paragraph — punchy, max 3 sentences]\n\n**The details:** [key facts]\n\n**Has this been done before?** [historical context]\n\n**The difference:** [what makes this unique]\n\n**Why it matters:** [significance for readers]\n\n**Real talk:** [honest unvarnished take]\n\n[Source: NAME](URL)\n\nTarget 320–400 words total.`,
-      user: `Write a lead story for this article.\n${customPrompt ? `Additional instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
+      system: `${toneDesc}${voiceNote}
+
+You write newsletter lead stories — 300–380 words, 5–6 paragraphs.
+
+Structure:
+- **Opening (2 sentences max):** Don't restate the headline. Lead with the sharpest specific insight, number, or angle that most coverage is missing.
+- **The details:** Key facts, timeline, specifics. What actually happened and who it involves.
+- **Context:** One or two sentences of relevant history or landscape — why this moment is different from before.
+- **The angle:** Your take. What's being underplayed or misframed. Make a specific, defensible claim.
+- **Why it matters:** Concrete downstream effects for readers. Be specific about who and how.
+- **Closing line:** One punchy sentence — a prediction, a question, or the thing to watch next.
+- End with: [Source: NAME](URL)
+
+Writing rules:
+- Specific beats vague. Numbers, names, and dates beat "many" and "some."
+- Sentences under 20 words hit harder than long ones.
+- No passive voice. No "it is worth noting." No "in a sign of."
+- Don't hedge. If you have a take, state it.
+- The brand voice profile — if set — overrides everything else. Write in that voice above all.`,
+      user: `Write a lead story for this article.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
     },
     'quick-hit': {
-      system: `${toneDesc}${voiceNote}\n\nYou write 60-90 word newsletter blurbs. Bold the article title on first reference. Be punchy and informative. End with a → link if URL provided.`,
-      user: `Write a Quick Hit blurb.\n${customPrompt ? `Additional instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
+      system: `${toneDesc}${voiceNote}
+
+You write newsletter quick hits — tight 80–110 word blurbs that give the reader the one thing they need to know and why it matters.
+
+Structure: **[Bold title]** — [The single sharpest fact or number, 1 sentence]. [What's surprising, significant, or underplayed — 1–2 sentences]. [→ Read more](URL)
+
+Rules:
+- Lead with the most concrete detail from the article, not the general topic.
+- Second sentence must add genuine insight — not just restate the first in different words.
+- If there's a stat, percentage, or dollar figure, use it.
+- Never open with "In a sign of..." or "According to..." or "As..."
+- End every blurb with a → link.`,
+      user: `Write a Quick Hit blurb.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
     },
     'subject-line': {
-      system: `You are a newsletter growth expert. You write subject lines with high open rates. Under 52 characters each. Create curiosity without clickbait. No emojis unless asked.`,
-      user: `Generate 3 numbered email subject lines for this newsletter content:\n${articleContext || customPrompt}`,
+      system: `You are a newsletter growth expert who has studied thousands of high-performing subject lines. You write subject lines that get opened.
+
+Rules:
+- Under 52 characters each (most email clients truncate beyond this)
+- Create curiosity or convey clear value — not both, pick one
+- Be specific: numbers, names, and concrete claims outperform vague promises
+- Never use: "You won't believe", "This will change", "Game-changer", or clickbait questions
+- No emojis unless the newsletter's voice explicitly uses them
+- Avoid colons — they read as corporate
+
+Generate 3 options. Number them. No explanations.`,
+      user: `Write 3 subject lines for this newsletter content:\n${articleContext || customPrompt}`,
     },
     'preview-text': {
-      system: `You write email preview text (the snippet shown in inbox next to subject line). Under 90 characters. Complements the subject line. Drives the open.`,
-      user: `Write preview text for:\nSubject: ${content.title || 'Newsletter'}\nContent: ${content.summary || content.text?.slice(0, 200) || customPrompt}`,
+      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Think of it as the second half of the pitch. Drive the open. No emojis.`,
+      user: `Write preview text for:\nSubject: ${content.title || 'Newsletter'}\nContent: ${content.summary || content.text?.slice(0, 300) || customPrompt}`,
     },
     rewrite: {
-      system: `${toneDesc}${voiceNote}\n\nYou rewrite content for newsletter audiences. Keep key facts. Improve voice, clarity, and momentum. Match the specified tone exactly.`,
+      system: `${toneDesc}${voiceNote}
+
+You rewrite source material into polished newsletter copy. Preserve all key facts. Cut everything else. Match the specified tone exactly. Improve clarity, momentum, and rhythm.
+
+Rules:
+- Shorter sentences > longer ones
+- Active voice only
+- Open with the strongest fact or claim, not background
+- If the source has a number, keep it
+- No filler phrases: "It is important to note," "In conclusion," "Moving forward"`,
       user: `Rewrite this for a newsletter:\n${customPrompt ? `Instructions: ${customPrompt}\n` : ''}\n${articleContext || content.text || content.summary}`,
     },
     summarize: {
-      system: `You summarize content in exactly 3 concise sentences for newsletter readers. Bold the single most important fact. Be direct.`,
+      system: `You summarize content in exactly 3 concise sentences for newsletter readers. Sentence 1: the most important specific fact (bold the key number or claim). Sentence 2: the most important context or implication. Sentence 3: what to watch or do next. No padding, no hedging.`,
       user: `Summarize in 3 sentences:\n${articleContext}`,
     },
     hooks: {
-      system: `${toneDesc}\n\nYou write newsletter hooks and teasers. Each is one punchy line that makes readers want to read on. Start each with →.`,
-      user: `Write 4 hooks or teasers for this content:\n${articleContext}`,
+      system: `${toneDesc}
+
+You write newsletter hooks — single punchy lines that make readers stop scrolling and want to read on. Each starts with →. No questions. Specific beats vague. Create intrigue by implying there's something most people don't know yet.`,
+      user: `Write 4 hooks for this content:\n${articleContext}`,
     },
     cta: {
-      system: `${toneDesc}${voiceNote}\n\nYou write newsletter calls-to-action. 2-3 sentences max. Drive upgrades, shares, or engagement. Specific and action-oriented.`,
-      user: customPrompt || `Write a CTA for newsletter readers to upgrade to Pro or share with a colleague.`,
+      system: `${toneDesc}${voiceNote}
+
+You write newsletter calls-to-action that convert. 2–3 sentences. Make it feel like a natural extension of the newsletter's voice — not a sales pitch bolted on at the end. Be specific about what the reader gets. One clear action.`,
+      user: customPrompt
+        ? `Write a CTA. Instructions: ${customPrompt}\nContext: ${articleContext}`
+        : `Write a CTA encouraging newsletter readers to share this issue with a colleague or upgrade to a paid tier.`,
     },
     'briefing-prompt': {
       system: `You analyze newsletter briefing examples and write a concise instruction prompt (2-4 sentences max) that captures the style so an AI can reproduce it. Focus on: format pattern, what comes first (stat, emoji, context), tone, URL placement, line length, and any distinctive patterns. Return ONLY the prompt text — no explanation, no preamble, no quotes around it.`,
@@ -504,7 +559,7 @@ app.post('/api/ai', async (req, res) => {
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
       const articleList = items.map((a, i) =>
-        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 300)}`
+        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 400)}`
       ).join('\n\n');
       return {
         system: `You write a "Today's Briefing" section for a newsletter. Format: one line per article, no bullet points.
@@ -529,10 +584,13 @@ Examples:
 
   const p = prompts[action] || prompts.rewrite;
 
+  // Allow more tokens for long-form pieces; quick hits need far less
+  const maxTokens = ['lead-story', 'rewrite', 'brand-voice'].includes(action) ? 2000 : 1200;
+
   try {
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1200,
+      max_tokens: maxTokens,
       system: p.system,
       messages: [{ role: 'user', content: p.user }],
     });

@@ -1937,12 +1937,21 @@ async function deleteNewsletter(id) {
   render();
 }
 
+function effectivePrompt(sectionId) {
+  // Per-issue prompt takes precedence; fall back to the matching section default
+  const issuePrompt = state.newsletter.prompts[sectionId] || '';
+  if (issuePrompt) return issuePrompt;
+  const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
+  const typeToKey = { briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta', generic: 'generic' };
+  return state.defaultPrompts?.[typeToKey[type] || 'generic'] || '';
+}
+
 async function applyPrompt(sectionId) {
   const articles = state.newsletter.sections[sectionId];
   if (!articles.length) { toast('No articles in this section yet', 'warn'); return; }
   const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
   const action = typeToAction[state.newsletter.sectionMeta[sectionId]?.type] || 'quick-hit';
-  const prompt = state.newsletter.prompts[sectionId];
+  const prompt = effectivePrompt(sectionId);
   articles.forEach(a => { a.loading = true; });
   refreshSectionContent(sectionId);
   for (const article of articles) {
@@ -1964,7 +1973,7 @@ async function rewriteStory(articleId, sectionId) {
   try {
     const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
     const action = typeToAction[state.newsletter.sectionMeta[sectionId]?.type] || 'quick-hit';
-    article.content = await callAI(action, article, { prompt: state.newsletter.prompts[sectionId] });
+    article.content = await callAI(action, article, { prompt: effectivePrompt(sectionId) });
   } catch (e) { toast('Rewrite failed: ' + e.message, 'error'); }
   article.loading = false;
   refreshSectionContent(sectionId);
