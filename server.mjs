@@ -584,6 +584,7 @@ app.post('/api/ai', async (req, res) => {
     tone = 'punchy-executive',
     prompt: customPrompt = '',
     brandVoice = '',
+    audienceAvatar = '',
     userId = '',
     authToken = '',
   } = req.body;
@@ -631,6 +632,9 @@ app.post('/api/ai', async (req, res) => {
   const voiceNote = brandVoice
     ? `\n\nCRITICAL — Brand voice to match exactly:\n${brandVoice}\nThis voice profile overrides default style. Write as if you ARE this writer.`
     : '';
+  const audienceNote = audienceAvatar
+    ? `\n\nTarget reader profile:\n${audienceAvatar}\nWrite for this specific person. Let their background shape what you emphasise, what you explain, and what you leave out.`
+    : '';
 
   // Give lead stories more source material
   const articleContext = [
@@ -645,7 +649,7 @@ app.post('/api/ai', async (req, res) => {
 
   const prompts = {
     'lead-story': {
-      system: `${toneDesc}${voiceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}
 
 You write newsletter lead stories — 300–380 words, 5–6 paragraphs.
 
@@ -667,7 +671,7 @@ Writing rules:
       user: `Write a lead story for this article.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
     },
     'quick-hit': {
-      system: `${toneDesc}${voiceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}
 
 You write newsletter quick hits — tight 80–110 word blurbs that give the reader the one thing they need to know and why it matters.
 
@@ -700,7 +704,7 @@ Generate 3 options. Number them. No explanations.`,
       user: `Write preview text for:\nSubject: ${content.title || 'Newsletter'}\nContent: ${content.summary || content.text?.slice(0, 300) || customPrompt}`,
     },
     rewrite: {
-      system: `${toneDesc}${voiceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}
 
 You rewrite source material into polished newsletter copy. Preserve all key facts. Cut everything else. Match the specified tone exactly. Improve clarity, momentum, and rhythm.
 
@@ -717,13 +721,13 @@ Rules:
       user: `Summarize in 3 sentences:\n${articleContext}`,
     },
     hooks: {
-      system: `${toneDesc}
+      system: `${toneDesc}${audienceNote}
 
 You write newsletter hooks — single punchy lines that make readers stop scrolling and want to read on. Each starts with →. No questions. Specific beats vague. Create intrigue by implying there's something most people don't know yet.`,
       user: `Write 4 hooks for this content:\n${articleContext}`,
     },
     cta: {
-      system: `${toneDesc}${voiceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}
 
 You write newsletter calls-to-action that convert. 2–3 sentences. Make it feel like a natural extension of the newsletter's voice — not a sales pitch bolted on at the end. Be specific about what the reader gets. One clear action.`,
       user: customPrompt

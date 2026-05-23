@@ -25,6 +25,7 @@ const state = {
   tone: 'punchy-executive',
   brandVoice: '',
   brandVoiceSamples: '',
+  audienceAvatar: '',
   defaultPrompts: {        // pre-fill section prompts on every new newsletter
     briefing: '',
     lead: '',
@@ -305,6 +306,7 @@ function handleInput(e) {
   else if (t.matches('#radius-slider')) { state.design.borderRadius = parseInt(t.value); document.querySelector('.radius-val') && (document.querySelector('.radius-val').textContent = t.value + 'px'); applyDesignSettings(); }
   else if (t.matches('#color-picker')) { state.design.primaryColor = t.value; scheduleSettingsSave(); applyDesignSettings(); }
   else if (t.matches('#brand-voice-samples')) state.brandVoiceSamples = t.value;
+  else if (t.matches('#audience-avatar')) { state.audienceAvatar = t.value; scheduleSettingsSave(); }
   else if (t.matches('.default-prompt-input')) {
     const key = t.dataset.type;
     if (!state.defaultPrompts) state.defaultPrompts = {};
@@ -1047,6 +1049,17 @@ function renderSettingsPage() {
           <div style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:4px">No voice profile yet</div>
           <div style="font-size:12px;color:var(--text-3)">Paste your newsletter URL above and click Analyze.</div>
         </div>`}
+      </div>
+
+      <!-- ── AUDIENCE AVATAR ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">Audience Avatar</div>
+        <div class="settings-section-sub">Describe your average subscriber — who they are, what they do, and what they want from your newsletter. The AI uses this to shape what it emphasises, what context it provides, and how it frames every piece it writes.</div>
+        <textarea id="audience-avatar" class="input" rows="6"
+          style="width:100%;resize:vertical;font-size:13px;line-height:1.7;margin-top:14px;font-family:inherit"
+          placeholder="e.g. Mid-level operators and founders in B2B SaaS — typically 30-45, based in the US. They have 5-10 years of experience and don't need basics explained. They read this newsletter first thing in the morning and want the sharpest take on what happened, not a summary of what they already saw on LinkedIn. They care about growth, efficiency, and competitive positioning. They're time-poor and sceptical of hype."
+        >${escHtml(state.audienceAvatar || '')}</textarea>
+        <div style="font-size:11px;color:var(--text-3);margin-top:5px">Saves automatically. The more specific you are, the better the writing.</div>
       </div>
 
       <!-- ── SECTION DEFAULTS ── -->
@@ -2390,6 +2403,7 @@ async function callAI(action, content, options = {}) {
       tone: state.tone,
       prompt: options.prompt || '',
       brandVoice: state.brandVoice,
+      audienceAvatar: state.audienceAvatar,
       userId: state.user?.id || '',
       authToken,
     }),
@@ -2898,6 +2912,7 @@ async function saveUserSettings() {
     user_id: state.user.id,
     brand_voice: state.brandVoice || '',
     brand_voice_samples: state.brandVoiceSamples || '',
+    audience_avatar: state.audienceAvatar || '',
     voice_urls: state.voiceUrls || [],
     tone: state.tone || 'punchy-executive',
     brand_color: state.design.primaryColor || '#6366f1',
@@ -2917,6 +2932,7 @@ async function loadUserSettings() {
   if (error || !data) return;
   if (data.brand_voice)              state.brandVoice           = data.brand_voice;
   if (data.brand_voice_samples)      state.brandVoiceSamples    = data.brand_voice_samples;
+  if (data.audience_avatar)          state.audienceAvatar       = data.audience_avatar;
   if (data.voice_urls?.length)       state.voiceUrls            = data.voice_urls;
   if (data.tone)                     state.tone                 = data.tone;
   if (data.brand_color)              state.design.primaryColor  = data.brand_color;
