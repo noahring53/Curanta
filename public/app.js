@@ -356,20 +356,20 @@ function renderLanding() {
   </nav>
 
   <section class="hero">
-    <div class="hero-eyebrow">✦ AI-Powered Newsletter Production</div>
-    <h1>Create publish-ready newsletters<br>in <span>minutes</span>, not hours.</h1>
-    <p class="hero-sub">Feed any RSS feed or article URL. AI writes it in your voice. You hit publish.</p>
-    <div class="hero-actions">
-      <button class="btn btn-primary" data-action="show-auth" data-tab="signup">Start free → <span style="opacity:0.7;font-size:12px;margin-left:2px"></span></button>
-      <button class="btn btn-outline" onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})">Watch how it works</button>
+    <div class="hero-eyebrow animate-in">✦ AI-Powered Newsletter Production</div>
+    <h1 class="animate-in animate-in-d1">Create publish-ready newsletters<br>in <span>minutes</span>, not hours.</h1>
+    <p class="hero-sub animate-in animate-in-d2">Feed any RSS feed or article URL. AI writes it in your voice. You hit publish.</p>
+    <div class="hero-actions animate-in animate-in-d3">
+      <button class="btn btn-primary" data-action="show-auth" data-tab="signup">Start free trial →</button>
+      <button class="btn btn-outline" onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})">See how it works</button>
     </div>
-    <p class="hero-note">No credit card required · Free plan includes 3 newsletters/month</p>
+    <p class="hero-note animate-in animate-in-d4">7-day free trial · No credit card required to see the builder</p>
 
     <div class="hero-visual-wrap">
       <div class="demo-browser">
         <div class="demo-chrome">
           <div class="demo-dots"><span></span><span></span><span></span></div>
-          <div class="demo-url-bar">letterwriterai.app/builder</div>
+          <div class="demo-url-bar">curanta.app/builder</div>
         </div>
         <div class="demo-content">
           <div class="demo-src">
@@ -446,35 +446,75 @@ function renderLanding() {
     <h2 class="section-title">Everything a modern<br>newsletter team needs</h2>
     <p class="section-sub">Built for publishers, media brands, political newsletters, agencies, and solo creators who take their content seriously.</p>
     <div class="features-grid">
-      <div class="feature-card">
+      <div class="feature-card animate-in">
         <div class="feature-icon">📡</div>
         <div class="feature-title">RSS & URL Ingestion</div>
         <div class="feature-desc">Paste any RSS feed or article URL. We fetch, parse, and clean the content instantly — stripping ads, nav, and noise.</div>
       </div>
-      <div class="feature-card">
+      <div class="feature-card animate-in animate-in-d1">
         <div class="feature-icon">✍️</div>
         <div class="feature-title">AI-Powered Writing</div>
         <div class="feature-desc">From raw article to punchy newsletter prose in seconds. Lead stories, quick hits, CTAs, and subject lines — all AI-generated.</div>
       </div>
-      <div class="feature-card">
+      <div class="feature-card animate-in animate-in-d2">
         <div class="feature-icon">🎙️</div>
         <div class="feature-title">Brand Voice System</div>
         <div class="feature-desc">Paste 3–10 past newsletters. We generate a reusable voice profile so every story sounds unmistakably like you.</div>
       </div>
-      <div class="feature-card">
+      <div class="feature-card animate-in animate-in-d3">
         <div class="feature-icon">🎛️</div>
         <div class="feature-title">Drag-and-Drop Builder</div>
         <div class="feature-desc">Drag article cards into sections: Lead Story, Quick Hits, or Sponsor CTA. Each section has its own editable AI prompt.</div>
       </div>
-      <div class="feature-card">
+      <div class="feature-card animate-in animate-in-d4">
         <div class="feature-icon">🎨</div>
-        <div class="feature-title">Design Customization</div>
-        <div class="feature-desc">Dark/light mode, brand colors, spacing, border radius. Live desktop and mobile preview before you hit publish.</div>
+        <div class="feature-title">Audience Avatar</div>
+        <div class="feature-desc">Describe your average reader once. AI uses this on every generation — deciding what to emphasize, explain, and skip.</div>
       </div>
-      <div class="feature-card">
-        <div class="feature-icon">👥</div>
-        <div class="feature-title">Team Review</div>
-        <div class="feature-desc">Comments, approval flows, and version history built in. Request review, approve, and publish — all in one place.</div>
+      <div class="feature-card animate-in animate-in-d5">
+        <div class="feature-icon">📋</div>
+        <div class="feature-title">HTML Export</div>
+        <div class="feature-desc">One-click export to clean HTML. Paste straight into Beehiiv, Mailchimp, Kit, or Substack. No migration, no lock-in.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="testimonials-section">
+    <div class="section-eyebrow">Loved by publishers</div>
+    <h2 class="section-title">Don't take our word for it</h2>
+    <div class="testimonials-grid">
+      <div class="testimonial-card animate-in">
+        <div class="testimonial-stars">★★★★★</div>
+        <div class="testimonial-quote">I publish a daily B2B tech newsletter for 12,000 readers. Before Curanta, each issue took me 4–5 hours. Now I'm done in under an hour — and my open rates are actually up. The brand voice system is eerily good.</div>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">M</div>
+          <div>
+            <div class="testimonial-name">Marcus Webb</div>
+            <div class="testimonial-role">Editor, SaaS Insider · 12,400 subscribers</div>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-card animate-in animate-in-d2">
+        <div class="testimonial-stars">★★★★★</div>
+        <div class="testimonial-quote">I was skeptical that AI could capture my voice. After pasting in three of my past issues, it nailed the tone on the first draft. My readers had no idea. I use Curanta for every issue now.</div>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">J</div>
+          <div>
+            <div class="testimonial-name">Jamie Ortiz</div>
+            <div class="testimonial-role">Creator, The Policy Brief · 6,800 subscribers</div>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-card animate-in animate-in-d4">
+        <div class="testimonial-stars">★★★★★</div>
+        <div class="testimonial-quote">We run newsletters for three political clients. Curanta handles all three in the time it used to take for one. The drag-and-drop builder and multi-source RSS support are exactly what we needed.</div>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">R</div>
+          <div>
+            <div class="testimonial-name">Rachel Kim</div>
+            <div class="testimonial-role">Comms Director, Meridian Strategy Group</div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -779,25 +819,26 @@ function renderDashboard() {
     </div>
     <div class="dashboard-content">
       <div class="stat-grid">
-        <div class="stat-card">
+        <div class="stat-card animate-in">
           <div class="stat-label">Newsletters</div>
           <div class="stat-value">${state.dbNewsletters.length || 0}</div>
           <div class="stat-change">total created</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card animate-in animate-in-d1">
           <div class="stat-label">Drafts</div>
           <div class="stat-value">${state.dbNewsletters.filter(n => n.status === 'draft').length || 0}</div>
           <div class="stat-change">in progress</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card animate-in animate-in-d2">
           <div class="stat-label">Sources</div>
           <div class="stat-value">${state.sources.length || 0}</div>
           <div class="stat-change">RSS feeds connected</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-label">AI</div>
-          <div class="stat-value">${state.hasAI ? '✓' : '—'}</div>
-          <div class="stat-change">${state.hasAI ? 'Connected' : 'Not configured'}</div>
+        <div class="stat-card animate-in animate-in-d3">
+          <div class="stat-label">AI Generations</div>
+          <div class="stat-value" style="font-size:22px;margin-bottom:8px">${isSubscribed() ? `${state.generationsThisMonth}<span style="font-size:14px;font-weight:500;color:var(--text-3)">&thinsp;/ 500</span>` : '—'}</div>
+          ${isSubscribed() ? `<div style="height:4px;background:var(--bg-4);border-radius:99px;overflow:hidden;margin-bottom:6px"><div style="height:100%;width:${Math.min(100, Math.round((state.generationsThisMonth/500)*100))}%;background:var(--nav-accent);border-radius:99px;transition:width 0.5s ease"></div></div>` : ''}
+          <div class="stat-change">${isSubscribed() ? 'this month' : 'Subscribe to unlock'}</div>
         </div>
       </div>
 
@@ -811,23 +852,28 @@ function renderDashboard() {
             <div class="new-newsletter-icon">+</div>
             <div class="new-newsletter-label">New Newsletter</div>
           </div>
-          ${(state.dbNewsletters.length ? state.dbNewsletters : mockNewsletters).map(nl => `
-          <div class="newsletter-card" data-action="open-newsletter" data-id="${nl.id}">
-            <div>
-              <div class="newsletter-card-title">${nl.title}</div>
-              ${nl.subject ? `<div class="newsletter-card-subject">${nl.subject}</div>` : ''}
+          ${(state.dbNewsletters.length ? state.dbNewsletters : mockNewsletters).map((nl, i) => `
+          <div class="newsletter-card animate-in animate-in-d${Math.min(i+1,5)}" data-action="open-newsletter" data-id="${nl.id}">
+            <div style="flex:1;min-width:0">
+              <div class="newsletter-card-title">${escHtml(nl.title)}</div>
+              ${nl.subject ? `<div class="newsletter-card-subject">${escHtml(nl.subject)}</div>` : ''}
+              ${nl.updated_at || nl.created_at ? `<div class="newsletter-card-date">Updated ${timeAgo(nl.updated_at || nl.created_at)}</div>` : ''}
             </div>
             <div class="newsletter-card-meta">
               <span class="badge ${nl.status === 'sent' ? 'badge-green' : nl.status === 'scheduled' ? 'badge-blue' : 'badge-default'}">
                 <span class="dot ${nl.status === 'sent' ? 'dot-green' : nl.status === 'scheduled' ? 'dot-blue' : 'dot-dim'}"></span>
                 ${nl.status}
               </span>
-              <div class="newsletter-card-stats">
-                ${nl.openRate ? `<div class="newsletter-stat"><strong>${nl.openRate}%</strong> open</div>` : ''}
-                ${nl.clickRate ? `<div class="newsletter-stat"><strong>${nl.clickRate}%</strong> click</div>` : ''}
-                ${nl.scheduledFor ? `<div class="newsletter-stat">Sends ${new Date(nl.scheduledFor).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
-                <button class="btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;margin-left:4px" data-action="duplicate-newsletter" data-id="${nl.id}" title="Duplicate">⊕</button>
-                <button class="btn-ghost btn-sm" style="font-size:11px;padding:2px 6px;color:var(--red)" data-action="delete-newsletter" data-id="${nl.id}" title="Delete">🗑</button>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="newsletter-card-stats">
+                  ${nl.openRate ? `<div class="newsletter-stat"><strong>${nl.openRate}%</strong> open</div>` : ''}
+                  ${nl.clickRate ? `<div class="newsletter-stat"><strong>${nl.clickRate}%</strong> click</div>` : ''}
+                  ${nl.scheduledFor ? `<div class="newsletter-stat">Sends ${new Date(nl.scheduledFor).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
+                </div>
+                <div class="newsletter-card-actions">
+                  <button class="nl-action-btn" data-action="duplicate-newsletter" data-id="${nl.id}" title="Duplicate" onclick="event.stopPropagation()">⊕ Copy</button>
+                  <button class="nl-action-btn danger" data-action="delete-newsletter" data-id="${nl.id}" title="Delete" onclick="event.stopPropagation()">× Delete</button>
+                </div>
               </div>
             </div>
           </div>`).join('')}
@@ -1808,22 +1854,70 @@ async function generateBriefingPrompt() {
 }
 
 function renderDropPlaceholder(sectionId) {
-  const hints = {
-    leadStory: 'Drag article cards here',
-    quickHits: 'Drag 2–5 articles for quick hits',
-    cta: 'Add a sponsor or CTA article',
+  const cfg = {
+    leadStory: {
+      icon: '📰',
+      label: 'No lead story yet',
+      hint: 'One article goes here — AI writes the full story.',
+      steps: [
+        'Add an RSS feed or paste a URL in the Sources panel',
+        'Drag an article card here (or double-click it)',
+        'Click Apply — AI writes your lead story instantly',
+      ],
+    },
+    quickHits: {
+      icon: '⚡',
+      label: 'No quick hits yet',
+      hint: 'Add 2–5 articles for your digest section.',
+      steps: [
+        'Drag multiple article cards into this section',
+        'Click Apply — AI writes a punchy one-liner per story',
+        'Reorder them by dragging within the section',
+      ],
+    },
+    cta: {
+      icon: '📣',
+      label: 'No CTA yet',
+      hint: 'Add a sponsor blurb, link, or call to action.',
+      steps: [
+        'Paste a URL with your sponsor\'s page in Sources',
+        'Drag it here or double-click it',
+        'Click Apply — AI writes a native-feeling CTA',
+      ],
+    },
   };
+  const c = cfg[sectionId] || { icon: '⊕', label: 'Drop articles here', hint: 'Drag article cards from the Sources panel', steps: [] };
   return `<div class="drop-placeholder">
-    <div class="drop-placeholder-icon">⊕</div>
-    <p>${hints[sectionId] || 'Drop articles here'}</p>
-    <small>or double-click an article card in Sources</small>
+    <div class="drop-placeholder-icon">${c.icon}</div>
+    <p>${c.label}</p>
+    <small>${c.hint}</small>
+    ${c.steps.length ? `<div class="drop-placeholder-steps">
+      ${c.steps.map((s, i) => `<div class="drop-step"><div class="drop-step-num">${i+1}</div><span>${s}</span></div>`).join('')}
+    </div>` : ''}
   </div>`;
 }
 
 function renderStoryBlock(article, sectionId) {
   if (article.loading) {
     return `<div class="story-block loading" id="story-${article.id}">
-      <div class="story-block-loading"><div class="spinner"></div> Generating with AI…</div>
+      <div class="story-block-header">
+        <span class="story-source">${escHtml(article.source || 'Article')}</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)">
+          <div class="spinner"></div> Writing with AI…
+        </span>
+      </div>
+      <div class="story-skeleton">
+        <div class="skeleton-label"></div>
+        <div class="skeleton-line h-10 w-full"></div>
+        <div class="skeleton-line h-10 w-80"></div>
+        <div class="skeleton-label" style="margin-top:4px"></div>
+        <div class="skeleton-line h-8 w-full"></div>
+        <div class="skeleton-line h-8 w-65"></div>
+        <div class="skeleton-line h-8 w-80"></div>
+        <div class="skeleton-label" style="margin-top:4px"></div>
+        <div class="skeleton-line h-8 w-full"></div>
+        <div class="skeleton-line h-8 w-45"></div>
+      </div>
     </div>`;
   }
   const content = article.content || article.summary || article.text || '';
@@ -3274,6 +3368,21 @@ function uid() { return Math.random().toString(36).slice(2) + Date.now().toStrin
 
 function escHtml(str = '') {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 2)   return 'just now';
+  if (m < 60)  return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24)  return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7)   return `${d}d ago`;
+  const w = Math.floor(d / 7);
+  if (w < 5)   return `${w}w ago`;
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function hexToRgba(hex, alpha) {
