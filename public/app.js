@@ -51,9 +51,10 @@ const state = {
   draggedStory: null,
   hasAI: false,
   hasStripe: false,
-  subscriptionStatus: 'inactive', // 'inactive' | 'active'
+  subscriptionStatus: 'inactive', // 'inactive' | 'trialing' | 'active'
   grandfathered: false,
   generationsThisMonth: 0,
+  trialEndsAt: null,
   voiceUrls: [],
   voiceUrlLoading: false,
   _expandedPrompts: {},     // transient: which section prompt boxes are open
@@ -155,7 +156,7 @@ async function init() {
   if (urlParams.get('checkout') === 'success') {
     history.replaceState(null, '', window.location.pathname);
     setTimeout(() => {
-      toast('🎉 Subscription active — welcome to Curanta Pro!', 'success');
+      toast('🎉 Trial started — 7 days free, cancel anytime from Subscription.', 'success');
       // Refresh subscription status
       if (sb && state.user) loadUserSettings().then(() => render());
     }, 500);
@@ -922,8 +923,12 @@ function renderSubscriptionPage() {
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:${state.grandfathered ? '0' : '20px'}">
             <div style="font-size:28px">✦</div>
             <div>
-              <div style="font-size:16px;font-weight:700;color:var(--green)">${state.grandfathered ? 'Grandfathered — Full Access' : 'Curanta Pro'}</div>
-              <div style="font-size:12px;color:var(--text-2);margin-top:2px">${state.grandfathered ? 'Your account has permanent full access.' : 'Your subscription is active.'}</div>
+              <div style="font-size:16px;font-weight:700;color:var(--green)">
+                ${state.grandfathered ? 'Grandfathered — Full Access' : state.subscriptionStatus === 'trialing' ? `Free Trial — ${trialDaysLeft()} day${trialDaysLeft() === 1 ? '' : 's'} left` : 'Curanta Pro — Active'}
+              </div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:2px">
+                ${state.grandfathered ? 'Your account has permanent full access.' : state.subscriptionStatus === 'trialing' ? 'Your card will be charged when the trial ends. Cancel anytime before then.' : 'Your subscription is active.'}
+              </div>
             </div>
           </div>
           ${!state.grandfathered ? `
@@ -934,7 +939,7 @@ function renderSubscriptionPage() {
           <div style="background:var(--bg-3);border-radius:6px;height:8px;overflow:hidden;margin-bottom:20px">
             <div style="background:var(--green);height:100%;width:${pct}%;transition:width 0.3s;border-radius:6px"></div>
           </div>
-          <button class="btn btn-outline" onclick="manageBilling()">Manage billing →</button>
+          <button class="btn btn-outline" onclick="manageBilling()">${state.subscriptionStatus === 'trialing' ? 'Cancel trial →' : 'Manage billing →'}</button>
           ` : ''}
         </div>
       </div>
@@ -952,7 +957,7 @@ function renderSubscriptionPage() {
             <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Subject lines, rewrites & CTAs</div>
             <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> 500 AI generations per month</div>
           </div>
-          <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="subscribe()">Subscribe now →</button>
+          <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="subscribe()">Start 7-day free trial →</button>
         </div>
       </div>
       `}
@@ -2730,10 +2735,10 @@ function showSubscribeModal() {
 <div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px">
   <div style="background:var(--bg-2);border:1px solid var(--border-md);border-radius:var(--r-xl);padding:36px;max-width:420px;width:100%;text-align:center;box-shadow:var(--shadow-xl)">
     <div style="font-size:36px;margin-bottom:12px">✦</div>
-    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Subscribe to generate</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Start your free trial</div>
     <div style="font-size:14px;color:var(--text-2);line-height:1.6;margin-bottom:24px">
-      AI generation requires an active subscription.<br>
-      You get <strong>500 generations per month</strong> — enough for a daily newsletter with room to spare.
+      Try Curanta free for <strong>7 days</strong> — no charge until the trial ends.<br>
+      Cancel anytime. 500 generations per month included.
     </div>
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px">
       <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> Lead stories, quick hits, briefings</div>
@@ -2741,7 +2746,7 @@ function showSubscribeModal() {
       <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> Subject lines, rewrites, CTAs</div>
       <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> 500 generations / month</div>
     </div>
-    <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:12px" onclick="closeModal();subscribe()">Subscribe now →</button>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:12px" onclick="closeModal();subscribe()">Start free trial →</button>
     <button class="btn btn-ghost btn-sm" style="margin-top:10px;width:100%;justify-content:center" onclick="closeModal()">Maybe later</button>
   </div>
 </div>`;
@@ -2916,9 +2921,10 @@ async function loadUserSettings() {
   if (data.tone)                     state.tone                 = data.tone;
   if (data.brand_color)              state.design.primaryColor  = data.brand_color;
   if (data.default_prompts)          state.defaultPrompts       = { ...state.defaultPrompts, ...data.default_prompts };
-  if (data.subscription_status)      state.subscriptionStatus   = data.subscription_status;
-  if (data.grandfathered)            state.grandfathered        = data.grandfathered;
+  if (data.subscription_status)           state.subscriptionStatus   = data.subscription_status;
+  if (data.grandfathered)                 state.grandfathered        = data.grandfathered;
   if (data.generations_this_month != null) state.generationsThisMonth = data.generations_this_month;
+  if (data.trial_ends_at)                 state.trialEndsAt          = data.trial_ends_at;
 }
 
 // ── Stripe helpers ────────────────────────────────────────────────────────────
@@ -2965,7 +2971,13 @@ async function manageBilling() {
 window.manageBilling = manageBilling;
 
 function isSubscribed() {
-  return state.grandfathered || state.subscriptionStatus === 'active';
+  return state.grandfathered || state.subscriptionStatus === 'active' || state.subscriptionStatus === 'trialing';
+}
+
+function trialDaysLeft() {
+  if (!state.trialEndsAt) return null;
+  const ms = new Date(state.trialEndsAt) - Date.now();
+  return Math.max(0, Math.ceil(ms / 86400000));
 }
 
 // Auto-save debounce

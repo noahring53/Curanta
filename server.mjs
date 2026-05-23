@@ -80,20 +80,30 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
   try {
     if (event.type === 'checkout.session.completed') {
       const userId = obj.metadata?.user_id;
-      if (userId) {
+      if (userId && obj.subscription) {
+        // Retrieve subscription to get real status + trial end date
+        const sub = await stripe.subscriptions.retrieve(obj.subscription);
         await sbPatch('user_settings', `user_id=eq.${userId}`, {
-          subscription_status: 'active',
+          subscription_status: sub.status, // 'trialing' or 'active'
           stripe_customer_id: obj.customer,
+          trial_ends_at: sub.trial_end
+            ? new Date(sub.trial_end * 1000).toISOString()
+            : null,
         }, true);
       }
     } else if (event.type === 'customer.subscription.updated') {
-      const status = obj.status === 'active' ? 'active' : 'inactive';
+      const validStatuses = ['active', 'trialing'];
+      const status = validStatuses.includes(obj.status) ? obj.status : 'inactive';
       await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(obj.customer)}`, {
         subscription_status: status,
+        trial_ends_at: obj.trial_end
+          ? new Date(obj.trial_end * 1000).toISOString()
+          : null,
       }, true);
     } else if (event.type === 'customer.subscription.deleted') {
       await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(obj.customer)}`, {
         subscription_status: 'inactive',
+        trial_ends_at: null,
       }, true);
     }
   } catch (err) {
@@ -138,6 +148,7 @@ app.post('/api/stripe/checkout', async (req, res) => {
       payment_method_types: ['card'],
       line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
       mode: 'subscription',
+      subscription_data: { trial_period_days: 7 },
       success_url: `${APP_URL}/?checkout=success`,
       cancel_url: `${APP_URL}/?checkout=cancelled`,
       metadata: { user_id: userId },
