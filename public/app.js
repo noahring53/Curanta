@@ -521,57 +521,104 @@ function renderLanding() {
 
   <section class="pricing-section" id="pricing">
     <div class="section-eyebrow">Pricing</div>
-    <h2 class="section-title">Simple, transparent pricing</h2>
-    <p class="section-sub" style="margin:0 auto 0">Start free. Scale when you're ready.</p>
+    <h2 class="section-title">One subscription.<br>Every issue, effortless.</h2>
+    <p class="section-sub" style="margin:0 auto 16px">7-day free trial. Cancel before it ends and pay nothing.</p>
+    <div class="pricing-value-bar">
+      The average newsletter editor spends <strong>6+ hours per issue</strong>. Curanta gets you to publish in under one.
+      At $49/mo, that's <strong>less than $3 per hour saved</strong> — and your issues will be better.
+    </div>
+
     <div class="pricing-grid">
+
+      <!-- Starter -->
       <div class="pricing-card">
         <div>
           <div class="pricing-tier">Starter</div>
           <div class="pricing-price"><span class="amount">$0</span><span class="period">/mo</span></div>
-          <div class="pricing-desc">Perfect for solo creators and early-stage newsletters.</div>
+          <div class="pricing-desc">For writers who want to try the builder before committing.</div>
         </div>
         <div class="pricing-features">
           <div class="pricing-feature">3 newsletters per month</div>
-          <div class="pricing-feature">50 AI generations</div>
-          <div class="pricing-feature">2 RSS feed sources</div>
-          <div class="pricing-feature">Copy HTML export</div>
+          <div class="pricing-feature">20 AI generations</div>
+          <div class="pricing-feature">1 RSS source</div>
+          <div class="pricing-feature">HTML export</div>
           <div class="pricing-feature dim">Brand voice system</div>
-          <div class="pricing-feature dim">Team collaboration</div>
+          <div class="pricing-feature dim">Audience avatar</div>
+          <div class="pricing-feature dim">Unlimited sources</div>
         </div>
-        <button class="btn btn-outline" style="width:100%" data-action="show-auth" data-tab="signup">Get started free</button>
+        <button class="btn btn-outline" style="width:100%;margin-top:auto" data-action="show-auth" data-tab="signup">Get started free</button>
       </div>
+
+      <!-- Pro -->
       <div class="pricing-card featured">
         <div>
           <div class="pricing-tier">Pro</div>
           <div class="pricing-price"><span class="amount">$49</span><span class="period">/mo</span></div>
-          <div class="pricing-desc">For serious publishers, media brands, and growing newsletters.</div>
+          <div class="pricing-trial-badge">✦ 7-day free trial included</div>
+          <div class="pricing-desc">For publishers who ship on a schedule and can't afford a slow week.</div>
         </div>
         <div class="pricing-features">
-          <div class="pricing-feature">Unlimited newsletters</div>
-          <div class="pricing-feature">Unlimited AI generations</div>
+          <div class="pricing-feature"><strong>500 AI generations/month</strong> — enough for a daily newsletter</div>
+          <div class="pricing-feature">Unlimited newsletters & drafts</div>
           <div class="pricing-feature">Unlimited RSS sources</div>
-          <div class="pricing-feature">Brand voice system</div>
-          <div class="pricing-feature">Team collaboration & approvals</div>
-          <div class="pricing-feature">Beehiiv, Mailchimp, Kit sync</div>
-          <div class="pricing-feature">Priority support</div>
+          <div class="pricing-feature">Brand voice — AI writes like you, not a chatbot</div>
+          <div class="pricing-feature">Audience avatar — AI writes for your reader</div>
+          <div class="pricing-feature">Section defaults — never start from a blank prompt</div>
+          <div class="pricing-feature">HTML export — paste straight into Beehiiv or Substack</div>
         </div>
-        <button class="btn btn-primary" style="width:100%" data-action="show-auth" data-tab="signup">Start Pro trial →</button>
+        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" data-action="show-auth" data-tab="signup">Start free trial →</button>
+        <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">No charge for 7 days. Cancel anytime.</div>
       </div>
+
+      <!-- Enterprise -->
       <div class="pricing-card">
         <div>
           <div class="pricing-tier">Enterprise</div>
-          <div class="pricing-price"><span class="amount" style="font-size:30px">Custom</span></div>
-          <div class="pricing-desc">For agencies, media companies, and political operations.</div>
+          <div class="pricing-price"><span class="amount" style="font-size:32px;letter-spacing:-0.02em">Custom</span></div>
+          <div class="pricing-desc">For agencies, media companies, and political operations running multiple brands.</div>
         </div>
         <div class="pricing-features">
           <div class="pricing-feature">Everything in Pro</div>
+          <div class="pricing-feature">Custom generation limits</div>
           <div class="pricing-feature">White-label interface</div>
+          <div class="pricing-feature">Multi-brand management</div>
           <div class="pricing-feature">API access</div>
           <div class="pricing-feature">Dedicated support + SLA</div>
-          <div class="pricing-feature">Custom integrations</div>
-          <div class="pricing-feature">Multi-brand management</div>
         </div>
-        <button class="btn btn-outline" style="width:100%">Book a demo</button>
+        <button class="btn btn-outline" style="width:100%;margin-top:auto">Book a demo</button>
+        <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">We'll respond within one business day.</div>
+      </div>
+
+    </div>
+
+    <!-- FAQ -->
+    <div class="pricing-faq">
+      <h3 class="pricing-faq-title">Common questions</h3>
+      <div class="faq-grid">
+        <div class="faq-item">
+          <div class="faq-q">Do I need a credit card for the trial?</div>
+          <div class="faq-a">Yes — Stripe requires a card to start. You won't be charged until the 7 days are up. Cancel before then and pay absolutely nothing.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">What counts as a generation?</div>
+          <div class="faq-a">Every AI write — a lead story, quick hit, briefing, subject line, or rewrite — uses one generation. 500/month is enough for a daily newsletter with room to spare.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">How does the brand voice system work?</div>
+          <div class="faq-a">Paste your newsletter URL. Curanta reads your past issues and builds a voice profile the AI matches on every generation. Every piece sounds like you wrote it.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">Can I cancel anytime?</div>
+          <div class="faq-a">Yes — one click from the Subscription page. No calls, no forms, no dark patterns. You keep access until the end of your billing period.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">What is an audience avatar?</div>
+          <div class="faq-a">You describe your average reader — their job, experience level, and what they want. The AI uses this to decide what to emphasise, what to explain, and what to skip.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">Does it work with my existing newsletter platform?</div>
+          <div class="faq-a">Yes. Curanta exports clean HTML you can paste into Beehiiv, Substack, Mailchimp, Kit, or any platform that accepts HTML. No migration required.</div>
+        </div>
       </div>
     </div>
   </section>

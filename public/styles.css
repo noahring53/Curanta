@@ -491,8 +491,18 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .pricing-features { display: flex; flex-direction: column; gap: 8px; flex: 1; }
 .pricing-feature { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
 .pricing-feature::before { content: '✓'; color: var(--green); font-weight: 700; flex-shrink: 0; margin-top: 1px; }
-.pricing-feature.dim { color: var(--text-2); }
+.pricing-feature.dim { color: var(--text-3); }
 .pricing-feature.dim::before { color: var(--text-3); content: '–'; }
+.pricing-value-bar { max-width: 620px; margin: 0 auto 52px; padding: 14px 22px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--r-md); font-size: 13.5px; color: var(--text-2); line-height: 1.6; text-align: center; }
+.pricing-value-bar strong { color: var(--text-1); }
+.pricing-trial-badge { display: inline-block; margin: 8px 0 12px; padding: 4px 12px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; border-radius: 99px; letter-spacing: 0.04em; }
+.pricing-faq { margin-top: 80px; text-align: left; }
+.pricing-faq-title { font-size: 22px; font-weight: 700; text-align: center; margin-bottom: 36px; }
+.faq-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+.faq-item { padding: 20px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.faq-q { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-1); }
+.faq-a { font-size: 13px; color: var(--text-2); line-height: 1.65; }
+@media (max-width: 700px) { .faq-grid { grid-template-columns: 1fr; } }
 
 /* CTA section */
 .cta-section {
