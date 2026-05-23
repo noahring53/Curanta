@@ -199,6 +199,7 @@ function render() {
   else if (state.view === 'builder') root.innerHTML = renderBuilder();
   else if (state.view === 'sources') root.innerHTML = renderSourcesPage();
   else if (state.view === 'settings') root.innerHTML = renderSettingsPage();
+  else if (state.view === 'subscription') root.innerHTML = renderSubscriptionPage();
   attachEvents();
   if (state.view === 'builder') { applyDesignSettings(); setupDropZones(); }
 }
@@ -900,6 +901,67 @@ function switchSettingsTab(tab) {
   render();
 }
 
+function renderSubscriptionPage() {
+  const used = state.generationsThisMonth || 0;
+  const pct = Math.min(100, Math.round((used / 500) * 100));
+  return `
+<div class="app-shell">
+  ${renderAppNav('subscription')}
+  <div class="app-main">
+    <div class="app-topbar">
+      <div>
+        <div class="page-title">Subscription</div>
+        <div class="page-sub">Manage your plan and billing.</div>
+      </div>
+    </div>
+    <div class="page-body" style="max-width:560px">
+
+      ${isSubscribed() ? `
+      <div class="settings-section">
+        <div style="padding:24px;background:var(--green-soft);border:1px solid var(--green);border-radius:var(--r-lg)">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:${state.grandfathered ? '0' : '20px'}">
+            <div style="font-size:28px">✦</div>
+            <div>
+              <div style="font-size:16px;font-weight:700;color:var(--green)">${state.grandfathered ? 'Grandfathered — Full Access' : 'Curanta Pro'}</div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:2px">${state.grandfathered ? 'Your account has permanent full access.' : 'Your subscription is active.'}</div>
+            </div>
+          </div>
+          ${!state.grandfathered ? `
+          <div style="margin-bottom:8px;display:flex;justify-content:space-between;font-size:12px;color:var(--text-2)">
+            <span>Generations this month</span>
+            <span>${used} / 500</span>
+          </div>
+          <div style="background:var(--bg-3);border-radius:6px;height:8px;overflow:hidden;margin-bottom:20px">
+            <div style="background:var(--green);height:100%;width:${pct}%;transition:width 0.3s;border-radius:6px"></div>
+          </div>
+          <button class="btn btn-outline" onclick="manageBilling()">Manage billing →</button>
+          ` : ''}
+        </div>
+      </div>
+      ` : `
+      <div class="settings-section">
+        <div style="padding:32px;border:1px dashed var(--border-md);border-radius:var(--r-lg);text-align:center">
+          <div style="font-size:36px;margin-bottom:12px">✦</div>
+          <div style="font-size:18px;font-weight:700;margin-bottom:8px">Get Curanta Pro</div>
+          <div style="font-size:13px;color:var(--text-2);line-height:1.7;margin-bottom:24px;max-width:360px;margin-left:auto;margin-right:auto">
+            Everything you need to produce a polished newsletter, fast.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;text-align:left;max-width:300px;margin:0 auto 28px">
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Lead stories, quick hits & briefings</div>
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Brand voice generation & matching</div>
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Subject lines, rewrites & CTAs</div>
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> 500 AI generations per month</div>
+          </div>
+          <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="subscribe()">Subscribe now →</button>
+        </div>
+      </div>
+      `}
+
+    </div>
+  </div>
+</div>`;
+}
+
 function renderSettingsPage() {
   const tab = state.settingsTab || 'content';
   const tones = [
@@ -1025,33 +1087,6 @@ function renderSettingsPage() {
 
       ` : `
 
-      <!-- ── SUBSCRIPTION ── -->
-      <div class="settings-section">
-        <div class="settings-section-title">Subscription</div>
-        ${isSubscribed() ? `
-        <div style="margin-top:12px;padding:16px;background:var(--green-soft);border:1px solid var(--green);border-radius:var(--r-md)">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${state.grandfathered ? '0' : '12px'}">
-            <div>
-              <div style="font-weight:600;font-size:14px;color:var(--green)">✓ ${state.grandfathered ? 'Grandfathered — Full Access' : 'Curanta Pro — Active'}</div>
-              ${!state.grandfathered ? `<div style="font-size:12px;color:var(--text-2);margin-top:2px">${state.generationsThisMonth} / 500 generations used this month</div>` : ''}
-            </div>
-          </div>
-          ${!state.grandfathered ? `
-          <div style="background:var(--bg-3);border-radius:6px;height:6px;overflow:hidden;margin-bottom:12px">
-            <div style="background:var(--green);height:100%;width:${Math.min(100, Math.round((state.generationsThisMonth/500)*100))}%;transition:width 0.3s"></div>
-          </div>
-          <button class="btn btn-outline btn-sm" onclick="manageBilling()">Manage billing →</button>
-          ` : ''}
-        </div>
-        ` : `
-        <div style="margin-top:12px;padding:20px;border:1px dashed var(--border-md);border-radius:var(--r-md);text-align:center">
-          <div style="font-size:13px;font-weight:600;margin-bottom:6px">No active subscription</div>
-          <div style="font-size:12px;color:var(--text-3);margin-bottom:16px">Subscribe to unlock AI generation — 500 generations/month.</div>
-          <button class="btn btn-primary" onclick="subscribe()">Subscribe now →</button>
-        </div>
-        `}
-      </div>
-
       <!-- ── API STATUS ── -->
       <div class="settings-section">
         <div class="settings-section-title">API Status</div>
@@ -1099,6 +1134,9 @@ function renderAppNav(active) {
     <div class="nav-item ${active === 'sources' ? 'active' : ''}" data-action="navigate" data-view="sources">
       <span class="icon">📡</span> Sources
     </div>
+    <div class="nav-item ${active === 'subscription' ? 'active' : ''}" data-action="navigate" data-view="subscription">
+      <span class="icon">✦</span> Subscription
+    </div>
     <div class="nav-item ${active === 'settings' ? 'active' : ''}" data-action="navigate" data-view="settings">
       <span class="icon">⚙️</span> Settings
     </div>
@@ -1118,7 +1156,7 @@ function renderAppNav(active) {
       <div class="user-avatar">${initial}</div>
       <div class="user-info">
         <div class="user-email">${email}</div>
-        <div class="user-plan">Curanta</div>
+        <div class="user-plan">${isSubscribed() ? '✦ Pro' : 'Free'}</div>
       </div>
       <button class="btn-icon" data-action="logout" title="Sign out" style="font-size:15px">↩</button>
     </div>
