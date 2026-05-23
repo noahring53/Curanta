@@ -601,9 +601,7 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .nav-bottom { padding: 12px 8px; border-top: 1px solid var(--border); }
 .user-row {
   display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--r-md);
-  cursor: pointer; transition: background 0.15s;
 }
-.user-row:hover { background: var(--bg-4); }
 .user-avatar {
   width: 30px; height: 30px; border-radius: 50%;
   background: var(--nav-accent);
@@ -614,6 +612,14 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .user-info { flex: 1; min-width: 0; }
 .user-email { font-size: 12px; color: var(--text-1); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-plan { font-size: 10px; color: var(--text-3); }
+.logout-btn {
+  width: 100%; margin-top: 4px; padding: 7px 12px;
+  font-size: 12px; font-weight: 500; color: var(--text-3);
+  background: transparent; border: 1px solid var(--border);
+  border-radius: var(--r-sm); text-align: center;
+  cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.logout-btn:hover { background: var(--red-soft); color: var(--red); border-color: rgba(239,68,68,0.25); }
 
 /* Theme toggle row */
 .theme-toggle-row {

@@ -1269,8 +1269,8 @@ function renderAppNav(active) {
         <div class="user-email">${email}</div>
         <div class="user-plan">${isSubscribed() ? '✦ Pro' : 'Free'}</div>
       </div>
-      <button class="btn-icon" data-action="logout" title="Sign out" style="font-size:15px">↩</button>
     </div>
+    <button class="logout-btn" data-action="logout">Sign out</button>
   </div>
 </nav>`;
 }
