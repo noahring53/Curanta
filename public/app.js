@@ -25,6 +25,14 @@ const state = {
   tone: 'punchy-executive',
   brandVoice: '',
   brandVoiceSamples: '',
+  defaultPrompts: {        // pre-fill section prompts on every new newsletter
+    briefing: '',
+    lead: '',
+    hits: '',
+    cta: '',
+    generic: '',
+  },
+  settingsTab: 'content',  // 'content' | 'appearance' | 'api'
   design: {
     primaryColor: '#6366f1',
     spacing: 2,
@@ -251,6 +259,7 @@ function handleClick(e) {
     case 'remove-section':    removeSection(d.sectionId); break;
     case 'confirm-add-section': confirmAddSection(); break;
     case 'fetch-briefing-examples': fetchBriefingExamples(); break;
+    case 'settings-tab': switchSettingsTab(d.tab); break;
   }
 }
 
@@ -273,6 +282,12 @@ function handleInput(e) {
   else if (t.matches('#radius-slider')) { state.design.borderRadius = parseInt(t.value); document.querySelector('.radius-val') && (document.querySelector('.radius-val').textContent = t.value + 'px'); applyDesignSettings(); }
   else if (t.matches('#color-picker')) { state.design.primaryColor = t.value; scheduleSettingsSave(); applyDesignSettings(); }
   else if (t.matches('#brand-voice-samples')) state.brandVoiceSamples = t.value;
+  else if (t.matches('.default-prompt-input')) {
+    const key = t.dataset.type;
+    if (!state.defaultPrompts) state.defaultPrompts = {};
+    state.defaultPrompts[key] = t.value;
+    scheduleSettingsSave();
+  }
   else if (t.matches('.story-edit-textarea')) {
     const article = state.newsletter.sections[t.dataset.section]?.find(a => a.id === t.dataset.articleId);
     if (article) article._editDraft = t.value;
@@ -852,13 +867,27 @@ function renderSourcesPage() {
 }
 
 // ── SETTINGS PAGE ─────────────────────────────────────────────────────────────
+function switchSettingsTab(tab) {
+  state.settingsTab = tab;
+  render();
+}
+
 function renderSettingsPage() {
+  const tab = state.settingsTab || 'content';
   const tones = [
     { id: 'punchy-executive', label: 'Punchy Executive' },
     { id: 'morning-brew', label: 'Morning Brew' },
     { id: 'neutral-newsroom', label: 'Neutral Newsroom' },
     { id: 'sharp-political', label: 'Sharp Political' },
   ];
+  const sectionTypes = [
+    { key: 'briefing', label: "Today's Briefing", desc: 'The opening section — a quick stat-first bulleted rundown of top stories with source links.', placeholder: 'e.g. Lead each bullet with the sharpest number from the article. Keep each line under 100 chars. End with the source URL.' },
+    { key: 'lead',     label: 'Lead Story',       desc: 'The main story — a full write-up with context, analysis, and your take.', placeholder: 'e.g. Open with the key insight, not the headline. Include a "Why it matters" paragraph. Keep to 150-200 words.' },
+    { key: 'hits',     label: 'Quick Hits',       desc: 'Short 1-2 sentence summaries of secondary stories.', placeholder: 'e.g. One bold sentence with the key fact, then one sentence of context. End with a link.' },
+    { key: 'cta',      label: 'Sponsor / CTA',    desc: 'Call-to-action or sponsor message.', placeholder: 'e.g. Write a 2-sentence sponsor read that feels native, not salesy. Include a clear action.' },
+    { key: 'generic',  label: 'Custom Sections',  desc: 'Default prompt for any custom sections you create.', placeholder: 'e.g. Write in a punchy, informative style. Lead with the most surprising fact.' },
+  ];
+
   return `
 <div class="app-shell">
   ${renderAppNav('settings')}
@@ -869,44 +898,44 @@ function renderSettingsPage() {
         <div class="page-sub">Global defaults applied to every newsletter you create.</div>
       </div>
     </div>
-    <div class="page-body" style="max-width:680px">
 
+    <div class="settings-tabs">
+      <button class="settings-tab ${tab === 'content' ? 'active' : ''}" data-action="settings-tab" data-tab="content">Content</button>
+      <button class="settings-tab ${tab === 'appearance' ? 'active' : ''}" data-action="settings-tab" data-tab="appearance">Appearance</button>
+      <button class="settings-tab ${tab === 'api' ? 'active' : ''}" data-action="settings-tab" data-tab="api">API</button>
+    </div>
+
+    <div class="page-body" style="max-width:700px">
+
+      ${tab === 'content' ? `
+
+      <!-- ── BRAND VOICE ── -->
       <div class="settings-section">
         <div class="settings-section-title">Brand Voice</div>
-        <div class="settings-section-sub">Paste your newsletter's homepage or any issue URL — Curanta will read your past issues and build a voice profile automatically. You can edit the result.</div>
-
-        <!-- Step 1: Publication URL -->
-        <div style="margin-top:16px">
-          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">Your newsletter URL</div>
-          <div style="display:flex;gap:8px">
-            <input id="voice-pub-url" class="input" type="url"
-              placeholder="https://yourname.substack.com  or  https://yourdomain.com"
-              style="flex:1" ${state.voiceUrlLoading ? 'disabled' : ''}>
-            <button class="btn btn-primary" id="voice-discover-btn" onclick="discoverVoice()" ${state.voiceUrlLoading ? 'disabled' : ''}>
-              ${state.voiceUrlLoading ? '<span class="spinner"></span> Analyzing…' : '🎙 Analyze'}
-            </button>
-          </div>
-          <div style="margin-top:6px;font-size:11px;color:var(--text-3)">
-            Works with Substack, Beehiiv, Ghost, WordPress, and any RSS-powered newsletter. We'll read up to 12 past issues.
-          </div>
+        <div class="settings-section-sub">Paste your newsletter's homepage — Curanta reads your past issues and builds a voice profile you can edit.</div>
+        <div style="margin-top:16px;display:flex;gap:8px">
+          <input id="voice-pub-url" class="input" type="url"
+            placeholder="https://yourname.substack.com  or  https://yourpub.beehiiv.com"
+            style="flex:1" ${state.voiceUrlLoading ? 'disabled' : ''}>
+          <button class="btn btn-primary" onclick="discoverVoice()" ${state.voiceUrlLoading ? 'disabled' : ''}>
+            ${state.voiceUrlLoading ? '<span class="spinner"></span> Analyzing…' : '🎙 Analyze'}
+          </button>
         </div>
+        <div style="margin-top:5px;font-size:11px;color:var(--text-3)">Works with Substack, Beehiiv, Ghost, WordPress — reads up to 12 past issues.</div>
 
         ${state.voiceUrls?.length ? `
         <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px">
           ${state.voiceUrls.map((u, i) => `
-          <div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;color:var(--green)">
+          <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 9px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;color:var(--green)">
             ✓ ${escHtml(new URL(u).hostname)}
             <button style="background:none;border:none;cursor:pointer;color:var(--green);font-size:13px;line-height:1;padding:0;opacity:0.7" data-action="remove-voice-url" data-idx="${i}">×</button>
           </div>`).join('')}
         </div>` : ''}
 
-        <!-- Step 2: Voice profile (editable once generated) -->
         ${state.brandVoice ? `
         <div style="margin-top:20px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--green)">🎙 Voice Profile — Active</span>
-            </div>
+            <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--green)">🎙 Voice Profile — Active</span>
             <div style="display:flex;gap:8px">
               <button class="btn btn-outline btn-sm" data-action="generate-brand-voice">↺ Regenerate</button>
               <button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear</button>
@@ -916,19 +945,39 @@ function renderSettingsPage() {
             style="width:100%;resize:vertical;font-size:13px;line-height:1.8;font-family:inherit"
             oninput="state.brandVoice=this.value;scheduleSettingsSave();refreshVoiceBadge()"
           >${escHtml(state.brandVoice)}</textarea>
-          <div style="font-size:11px;color:var(--text-3);margin-top:6px">Edit freely — changes save automatically and apply to all future AI generations.</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:5px">Edit freely — saves automatically and applies to every AI generation.</div>
         </div>` : `
-        <div style="margin-top:16px;padding:20px;border:1px dashed var(--border-md);border-radius:var(--r-md);text-align:center;color:var(--text-3)">
-          <div style="font-size:24px;margin-bottom:8px">🎙</div>
-          <div style="font-size:13px;font-weight:500;color:var(--text-2);margin-bottom:4px">No voice profile yet</div>
-          <div style="font-size:12px">Paste your newsletter URL above and click Analyze to get started.</div>
+        <div style="margin-top:16px;padding:24px;border:1px dashed var(--border-md);border-radius:var(--r-md);text-align:center">
+          <div style="font-size:28px;margin-bottom:8px">🎙</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:4px">No voice profile yet</div>
+          <div style="font-size:12px;color:var(--text-3)">Paste your newsletter URL above and click Analyze.</div>
         </div>`}
       </div>
 
+      <!-- ── SECTION DEFAULTS ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">Section Defaults</div>
+        <div class="settings-section-sub">Default AI instructions for each section type. Pre-filled on every new newsletter so you never start from scratch.</div>
+        <div style="display:flex;flex-direction:column;gap:20px;margin-top:16px">
+          ${sectionTypes.map(s => `
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:2px">${s.label}</div>
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">${s.desc}</div>
+            <textarea class="input default-prompt-input" data-type="${s.key}" rows="2"
+              style="width:100%;resize:vertical;font-size:12px"
+              placeholder="${escHtml(s.placeholder)}"
+            >${escHtml(state.defaultPrompts?.[s.key] || '')}</textarea>
+          </div>`).join('')}
+        </div>
+      </div>
+
+      ` : tab === 'appearance' ? `
+
+      <!-- ── DEFAULT TONE ── -->
       <div class="settings-section">
         <div class="settings-section-title">Default Tone</div>
         <div class="settings-section-sub">Applied to new newsletters. Can be changed per session in the builder.</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
           ${tones.map(t => `
           <button class="btn ${state.tone === t.id ? 'btn-primary' : 'btn-outline'}" data-action="select-tone" data-tone="${t.id}">
             ${t.label}
@@ -936,18 +985,22 @@ function renderSettingsPage() {
         </div>
       </div>
 
+      <!-- ── BRAND COLOR ── -->
       <div class="settings-section">
         <div class="settings-section-title">Brand Color</div>
         <div class="settings-section-sub">Used in email previews and exported HTML.</div>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px">
           <input type="color" id="color-picker" value="${state.design.primaryColor}" style="width:44px;height:36px;border:1px solid var(--border);border-radius:var(--r-sm);padding:2px;background:var(--bg-2);cursor:pointer">
           <span style="font-size:13px;color:var(--text-2);font-family:var(--font-mono)">${state.design.primaryColor}</span>
         </div>
       </div>
 
+      ` : `
+
+      <!-- ── API STATUS ── -->
       <div class="settings-section">
         <div class="settings-section-title">API Status</div>
-        <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
           <div class="settings-api-row">
             <span>Anthropic (AI)</span>
             <span class="badge ${state.hasAI ? 'badge-green' : 'badge-default'}">${state.hasAI ? '✓ Connected' : 'Not configured'}</span>
@@ -956,16 +1009,14 @@ function renderSettingsPage() {
             <span>Supabase (Database)</span>
             <span class="badge ${sb ? 'badge-green' : 'badge-default'}">${sb ? '✓ Connected' : 'Not configured'}</span>
           </div>
-          <div class="settings-api-row">
-            <span>Beehiiv (Publish)</span>
-            <span class="badge badge-default">Add key to .env</span>
-          </div>
           ${!state.hasAI || !sb ? `
           <div style="font-size:12px;color:var(--text-3);margin-top:4px">
             Add missing keys to your <code style="background:var(--bg-3);padding:1px 5px;border-radius:3px">.env</code> file and restart the server.
           </div>` : ''}
         </div>
       </div>
+
+      `}
 
     </div>
   </div>
@@ -2701,6 +2752,7 @@ async function saveUserSettings() {
     voice_urls: state.voiceUrls || [],
     tone: state.tone || 'punchy-executive',
     brand_color: state.design.primaryColor || '#6366f1',
+    default_prompts: state.defaultPrompts || {},
     updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id' });
   if (error) console.error('Settings save error:', error);
@@ -2713,12 +2765,13 @@ async function loadUserSettings() {
     .select('*')
     .eq('user_id', state.user.id)
     .single();
-  if (error || !data) return; // no settings yet — use defaults
-  if (data.brand_voice)         state.brandVoice         = data.brand_voice;
-  if (data.brand_voice_samples) state.brandVoiceSamples  = data.brand_voice_samples;
-  if (data.voice_urls?.length)  state.voiceUrls          = data.voice_urls;
-  if (data.tone)                state.tone               = data.tone;
+  if (error || !data) return;
+  if (data.brand_voice)         state.brandVoice          = data.brand_voice;
+  if (data.brand_voice_samples) state.brandVoiceSamples   = data.brand_voice_samples;
+  if (data.voice_urls?.length)  state.voiceUrls           = data.voice_urls;
+  if (data.tone)                state.tone                = data.tone;
   if (data.brand_color)         state.design.primaryColor = data.brand_color;
+  if (data.default_prompts)     state.defaultPrompts      = { ...state.defaultPrompts, ...data.default_prompts };
 }
 
 // Auto-save debounce
@@ -2816,6 +2869,8 @@ async function loadBuilderData(newsletterId) {
 }
 
 function resetNewsletter() {
+  const dp = state.defaultPrompts || {};
+  // Map default prompts by section type onto the default section IDs
   state.newsletterId = null;
   state.newsletter = {
     title: 'Untitled Newsletter',
@@ -2823,7 +2878,12 @@ function resetNewsletter() {
     previewText: '',
     sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
     topStoriesContent: '',
-    prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
+    prompts: {
+      topStories: dp.briefing || '',
+      leadStory:  dp.lead     || '',
+      quickHits:  dp.hits     || '',
+      cta:        dp.cta      || '',
+    },
     sectionOrder: ['topStories', 'leadStory', 'quickHits', 'cta'],
     sectionMeta: {
       topStories: { name: "Today's Briefing", type: 'briefing' },
