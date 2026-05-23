@@ -202,6 +202,7 @@ function render() {
   else if (state.view === 'sources') root.innerHTML = renderSourcesPage();
   else if (state.view === 'settings') root.innerHTML = renderSettingsPage();
   else if (state.view === 'subscription') root.innerHTML = renderSubscriptionPage();
+  else if (state.view === 'publications') root.innerHTML = renderPublicationsPage();
   attachEvents();
   if (state.view === 'builder') { applyDesignSettings(); setupDropZones(); }
 }
@@ -228,6 +229,7 @@ function handleClick(e) {
 
   switch (action) {
     case 'navigate':        navigate(d.view); break;
+    case 'show-pub-upgrade': document.querySelector('.pub-enterprise-card')?.scrollIntoView({behavior:'smooth',block:'center'}); document.querySelector('.pub-enterprise-card')?.classList.add('pub-enterprise-card-highlight'); setTimeout(()=>document.querySelector('.pub-enterprise-card')?.classList.remove('pub-enterprise-card-highlight'),1800); break;
     case 'open-builder':    navigate('builder'); break;
     case 'open-newsletter': navigate('builder', { id: d.id }); break;
     case 'show-auth':       showAuthModal(d.tab || 'login'); break;
@@ -1076,6 +1078,71 @@ function renderSubscriptionPage() {
 </div>`;
 }
 
+function renderPublicationsPage() {
+  const email = state.user?.email || '';
+  const pubName = state.brandVoice
+    ? (state.brandVoice.match(/newsletter called ["']?([^"'\n,]+)/i)?.[1] || 'My Publication')
+    : 'My Publication';
+  return `
+<div class="app-shell">
+  ${renderAppNav('publications')}
+  <div class="app-main">
+    <div class="app-topbar">
+      <div class="page-title">Publications</div>
+    </div>
+    <div class="settings-page" style="max-width:720px">
+
+      <div class="pub-list">
+        <!-- Current publication -->
+        <div class="pub-card pub-card-active">
+          <div class="pub-card-left">
+            <div class="pub-avatar">${(email[0] || 'P').toUpperCase()}</div>
+            <div>
+              <div class="pub-name">${escHtml(pubName)}</div>
+              <div class="pub-meta">${escHtml(email)} &nbsp;·&nbsp; <span class="badge badge-accent" style="font-size:10px">Current</span></div>
+            </div>
+          </div>
+          <button class="btn btn-outline btn-sm" data-action="navigate" data-view="settings">Edit settings →</button>
+        </div>
+
+        <!-- Add publication — upgrade wall -->
+        <div class="pub-card pub-card-add" data-action="show-pub-upgrade">
+          <div class="pub-card-left">
+            <div class="pub-avatar pub-avatar-add">+</div>
+            <div>
+              <div class="pub-name" style="color:var(--text-2)">Add a publication</div>
+              <div class="pub-meta">Separate voice, sources, and settings per brand</div>
+            </div>
+          </div>
+          <span class="badge badge-accent" style="font-size:11px;padding:4px 10px">Enterprise</span>
+        </div>
+      </div>
+
+      <div class="pub-enterprise-card">
+        <div class="pub-ent-icon">🏢</div>
+        <div>
+          <div class="pub-ent-title">Running multiple brands?</div>
+          <div class="pub-ent-sub">Curanta Enterprise gives each publication its own brand voice, audience avatar, RSS sources, design settings, and newsletter history — all under one login. Agencies and media companies use this to manage 5–20+ brands from a single dashboard.</div>
+          <div class="pub-ent-features">
+            <div class="pub-ent-feature">✓ Unlimited publications</div>
+            <div class="pub-ent-feature">✓ Per-brand voice &amp; avatar</div>
+            <div class="pub-ent-feature">✓ Isolated source libraries</div>
+            <div class="pub-ent-feature">✓ Custom generation limits</div>
+            <div class="pub-ent-feature">✓ White-label interface</div>
+            <div class="pub-ent-feature">✓ Dedicated support &amp; SLA</div>
+          </div>
+          <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+            <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" class="btn btn-primary">Book a demo →</a>
+            <button class="btn btn-outline" onclick="navigator.clipboard.writeText('hello@curanta.app').then(()=>toast('Email copied','success'))">Copy email</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>`;
+}
+
 function renderSettingsPage() {
   const tab = state.settingsTab || 'content';
   const tones = [
@@ -1258,6 +1325,9 @@ function renderAppNav(active) {
     </div>
     <div class="nav-item ${active === 'sources' ? 'active' : ''}" data-action="navigate" data-view="sources">
       <span class="icon">📡</span> Sources
+    </div>
+    <div class="nav-item ${active === 'publications' ? 'active' : ''}" data-action="navigate" data-view="publications">
+      <span class="icon">📰</span> Publications
     </div>
     <div class="nav-item ${active === 'subscription' ? 'active' : ''}" data-action="navigate" data-view="subscription">
       <span class="icon">✦</span> Subscription
