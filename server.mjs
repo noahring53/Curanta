@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import { load } from 'cheerio';
 import Parser from 'rss-parser';
 import Anthropic from '@anthropic-ai/sdk';
+import Stripe from 'stripe';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -25,6 +26,83 @@ const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY)
+  : null;
+
+const SUPABASE_URL       = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY  = process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_SVC_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const STRIPE_PRICE_ID    = process.env.STRIPE_PRICE_ID || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const APP_URL            = process.env.APP_URL || 'https://curanta-production.up.railway.app';
+const GENERATION_LIMIT   = 500; // per month per paid user
+
+// ── Supabase REST helpers ─────────────────────────────────────────────────────
+async function sbGet(table, filter, authToken) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}&select=*`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${authToken}`,
+    },
+  });
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : null;
+}
+
+async function sbPatch(table, filter, updates, useServiceRole = false) {
+  const key = useServiceRole ? SUPABASE_SVC_KEY : SUPABASE_ANON_KEY;
+  await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(updates),
+  });
+}
+
+// ── Stripe Webhook — MUST be before express.json() ───────────────────────────
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  const obj = event.data.object;
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const userId = obj.metadata?.user_id;
+      if (userId) {
+        await sbPatch('user_settings', `user_id=eq.${userId}`, {
+          subscription_status: 'active',
+          stripe_customer_id: obj.customer,
+        }, true);
+      }
+    } else if (event.type === 'customer.subscription.updated') {
+      const status = obj.status === 'active' ? 'active' : 'inactive';
+      await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(obj.customer)}`, {
+        subscription_status: status,
+      }, true);
+    } else if (event.type === 'customer.subscription.deleted') {
+      await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(obj.customer)}`, {
+        subscription_status: 'inactive',
+      }, true);
+    }
+  } catch (err) {
+    console.error('Webhook handler error:', err.message);
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
@@ -34,7 +112,63 @@ app.get('/api/config', (_req, res) => {
     supabaseUrl: process.env.SUPABASE_URL ?? '',
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY ?? '',
     hasAI: !!process.env.ANTHROPIC_API_KEY,
+    stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY ?? '',
+    hasStripe: !!process.env.STRIPE_SECRET_KEY,
   });
+});
+
+// ── /api/stripe/checkout ──────────────────────────────────────────────────────
+app.post('/api/stripe/checkout', async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
+  const { userId, authToken, email } = req.body;
+  if (!userId || !authToken) return res.status(400).json({ error: 'Missing auth' });
+
+  try {
+    const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
+    let customerId = settings?.stripe_customer_id;
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({ email, metadata: { user_id: userId } });
+      customerId = customer.id;
+      await sbPatch('user_settings', `user_id=eq.${userId}`, { stripe_customer_id: customerId }, false);
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      mode: 'subscription',
+      success_url: `${APP_URL}/?checkout=success`,
+      cancel_url: `${APP_URL}/?checkout=cancelled`,
+      metadata: { user_id: userId },
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('Checkout error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /api/stripe/portal ────────────────────────────────────────────────────────
+app.post('/api/stripe/portal', async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
+  const { userId, authToken } = req.body;
+  if (!userId || !authToken) return res.status(400).json({ error: 'Missing auth' });
+
+  try {
+    const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
+    if (!settings?.stripe_customer_id) return res.status(400).json({ error: 'No subscription found' });
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: settings.stripe_customer_id,
+      return_url: APP_URL,
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('Portal error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -439,10 +573,47 @@ app.post('/api/ai', async (req, res) => {
     tone = 'punchy-executive',
     prompt: customPrompt = '',
     brandVoice = '',
+    userId = '',
+    authToken = '',
   } = req.body;
 
   if (!anthropic) {
     return res.json({ result: mockResponse(action, content, contents), mock: true });
+  }
+
+  // ── Subscription + usage check ─────────────────────────────────────────────
+  if (userId && authToken && SUPABASE_URL) {
+    try {
+      const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
+      if (settings) {
+        const allowed = settings.grandfathered || settings.subscription_status === 'active';
+        if (!allowed) {
+          return res.status(402).json({ error: 'subscription_required' });
+        }
+        if (!settings.grandfathered) {
+          // Reset counter if it's been > 30 days
+          const resetAt = new Date(settings.generations_reset_at || 0);
+          const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+          if (resetAt < thirtyDaysAgo) {
+            sbPatch('user_settings', `user_id=eq.${userId}`,
+              { generations_this_month: 1, generations_reset_at: new Date().toISOString() },
+              false); // fire-and-forget
+          } else if ((settings.generations_this_month || 0) >= GENERATION_LIMIT) {
+            return res.status(429).json({
+              error: 'generation_limit',
+              message: `Monthly limit of ${GENERATION_LIMIT} generations reached. Resets in ${Math.ceil((resetAt.getTime() + 30*24*60*60*1000 - Date.now()) / 86400000)} days.`,
+            });
+          } else {
+            sbPatch('user_settings', `user_id=eq.${userId}`,
+              { generations_this_month: (settings.generations_this_month || 0) + 1 },
+              false); // fire-and-forget
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Subscription check error:', err.message);
+      // Don't block generation on subscription check failure
+    }
   }
 
   const toneDesc = TONES[tone] || TONES['punchy-executive'];

@@ -50,6 +50,10 @@ const state = {
   draggedArticleId: null,
   draggedStory: null,
   hasAI: false,
+  hasStripe: false,
+  subscriptionStatus: 'inactive', // 'inactive' | 'active'
+  grandfathered: false,
+  generationsThisMonth: 0,
   voiceUrls: [],
   voiceUrlLoading: false,
   _expandedPrompts: {},     // transient: which section prompt boxes are open
@@ -103,6 +107,7 @@ async function init() {
     const res = await fetch('/api/config');
     cfg = await res.json();
     state.hasAI = cfg.hasAI;
+    state.hasStripe = cfg.hasStripe;
     if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
       sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
       const { data: { session } } = await sb.auth.getSession();
@@ -144,6 +149,20 @@ async function init() {
     }
   } catch (e) { console.warn('Init error:', e); }
   render();
+
+  // Handle Stripe redirect params
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('checkout') === 'success') {
+    history.replaceState(null, '', window.location.pathname);
+    setTimeout(() => {
+      toast('🎉 Subscription active — welcome to Curanta Pro!', 'success');
+      // Refresh subscription status
+      if (sb && state.user) loadUserSettings().then(() => render());
+    }, 500);
+  } else if (urlParams.get('checkout') === 'cancelled') {
+    history.replaceState(null, '', window.location.pathname);
+    toast('Checkout cancelled — you can subscribe anytime from Settings.', 'info');
+  }
 }
 
 // ── ROUTER ────────────────────────────────────────────────────────────────────
@@ -1006,6 +1025,33 @@ function renderSettingsPage() {
 
       ` : `
 
+      <!-- ── SUBSCRIPTION ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">Subscription</div>
+        ${isSubscribed() ? `
+        <div style="margin-top:12px;padding:16px;background:var(--green-soft);border:1px solid var(--green);border-radius:var(--r-md)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${state.grandfathered ? '0' : '12px'}">
+            <div>
+              <div style="font-weight:600;font-size:14px;color:var(--green)">✓ ${state.grandfathered ? 'Grandfathered — Full Access' : 'Curanta Pro — Active'}</div>
+              ${!state.grandfathered ? `<div style="font-size:12px;color:var(--text-2);margin-top:2px">${state.generationsThisMonth} / 500 generations used this month</div>` : ''}
+            </div>
+          </div>
+          ${!state.grandfathered ? `
+          <div style="background:var(--bg-3);border-radius:6px;height:6px;overflow:hidden;margin-bottom:12px">
+            <div style="background:var(--green);height:100%;width:${Math.min(100, Math.round((state.generationsThisMonth/500)*100))}%;transition:width 0.3s"></div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="manageBilling()">Manage billing →</button>
+          ` : ''}
+        </div>
+        ` : `
+        <div style="margin-top:12px;padding:20px;border:1px dashed var(--border-md);border-radius:var(--r-md);text-align:center">
+          <div style="font-size:13px;font-weight:600;margin-bottom:6px">No active subscription</div>
+          <div style="font-size:12px;color:var(--text-3);margin-bottom:16px">Subscribe to unlock AI generation — 500 generations/month.</div>
+          <button class="btn btn-primary" onclick="subscribe()">Subscribe now →</button>
+        </div>
+        `}
+      </div>
+
       <!-- ── API STATUS ── -->
       <div class="settings-section">
         <div class="settings-section-title">API Status</div>
@@ -1018,10 +1064,10 @@ function renderSettingsPage() {
             <span>Supabase (Database)</span>
             <span class="badge ${sb ? 'badge-green' : 'badge-default'}">${sb ? '✓ Connected' : 'Not configured'}</span>
           </div>
-          ${!state.hasAI || !sb ? `
-          <div style="font-size:12px;color:var(--text-3);margin-top:4px">
-            Add missing keys to your <code style="background:var(--bg-3);padding:1px 5px;border-radius:3px">.env</code> file and restart the server.
-          </div>` : ''}
+          <div class="settings-api-row">
+            <span>Stripe (Payments)</span>
+            <span class="badge ${state.hasStripe ? 'badge-green' : 'badge-default'}">${state.hasStripe ? '✓ Connected' : 'Not configured'}</span>
+          </div>
         </div>
       </div>
 
@@ -2291,6 +2337,7 @@ function addToHistory(action, result) {
 
 // ── AI API CALL ───────────────────────────────────────────────────────────────
 async function callAI(action, content, options = {}) {
+  const authToken = await getAuthToken();
   const res = await fetch('/api/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2300,10 +2347,16 @@ async function callAI(action, content, options = {}) {
       tone: state.tone,
       prompt: options.prompt || '',
       brandVoice: state.brandVoice,
+      userId: state.user?.id || '',
+      authToken,
     }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'AI request failed');
+  if (!res.ok) {
+    if (data.error === 'subscription_required') { showSubscribeModal(); throw new Error('subscription_required'); }
+    if (data.error === 'generation_limit') { toast(data.message || 'Monthly generation limit reached', 'error'); throw new Error('generation_limit'); }
+    throw new Error(data.error || 'AI request failed');
+  }
   return data.result;
 }
 
@@ -2630,6 +2683,33 @@ function mockSync(platform) {
 }
 
 
+// ── SUBSCRIBE MODAL ───────────────────────────────────────────────────────────
+function showSubscribeModal() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  const used = state.generationsThisMonth || 0;
+  modal.innerHTML = `
+<div id="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px">
+  <div style="background:var(--bg-2);border:1px solid var(--border-md);border-radius:var(--r-xl);padding:36px;max-width:420px;width:100%;text-align:center;box-shadow:var(--shadow-xl)">
+    <div style="font-size:36px;margin-bottom:12px">✦</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Subscribe to generate</div>
+    <div style="font-size:14px;color:var(--text-2);line-height:1.6;margin-bottom:24px">
+      AI generation requires an active subscription.<br>
+      You get <strong>500 generations per month</strong> — enough for a daily newsletter with room to spare.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> Lead stories, quick hits, briefings</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> Brand voice generation & matching</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> Subject lines, rewrites, CTAs</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> 500 generations / month</div>
+    </div>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:12px" onclick="closeModal();subscribe()">Subscribe now →</button>
+    <button class="btn btn-ghost btn-sm" style="margin-top:10px;width:100%;justify-content:center" onclick="closeModal()">Maybe later</button>
+  </div>
+</div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
+}
+
 // ── CUSTOM SECTIONS ───────────────────────────────────────────────────────────
 function showAddSectionModal() {
   const modal = document.getElementById('modal-root');
@@ -2792,12 +2872,62 @@ async function loadUserSettings() {
     .eq('user_id', state.user.id)
     .single();
   if (error || !data) return;
-  if (data.brand_voice)         state.brandVoice          = data.brand_voice;
-  if (data.brand_voice_samples) state.brandVoiceSamples   = data.brand_voice_samples;
-  if (data.voice_urls?.length)  state.voiceUrls           = data.voice_urls;
-  if (data.tone)                state.tone                = data.tone;
-  if (data.brand_color)         state.design.primaryColor = data.brand_color;
-  if (data.default_prompts)     state.defaultPrompts      = { ...state.defaultPrompts, ...data.default_prompts };
+  if (data.brand_voice)              state.brandVoice           = data.brand_voice;
+  if (data.brand_voice_samples)      state.brandVoiceSamples    = data.brand_voice_samples;
+  if (data.voice_urls?.length)       state.voiceUrls            = data.voice_urls;
+  if (data.tone)                     state.tone                 = data.tone;
+  if (data.brand_color)              state.design.primaryColor  = data.brand_color;
+  if (data.default_prompts)          state.defaultPrompts       = { ...state.defaultPrompts, ...data.default_prompts };
+  if (data.subscription_status)      state.subscriptionStatus   = data.subscription_status;
+  if (data.grandfathered)            state.grandfathered        = data.grandfathered;
+  if (data.generations_this_month != null) state.generationsThisMonth = data.generations_this_month;
+}
+
+// ── Stripe helpers ────────────────────────────────────────────────────────────
+async function getAuthToken() {
+  if (!sb) return '';
+  try {
+    const { data } = await sb.auth.getSession();
+    return data.session?.access_token || '';
+  } catch { return ''; }
+}
+
+async function subscribe() {
+  if (!state.user) { toast('Sign in first', 'warn'); return; }
+  toast('Opening checkout…', 'info');
+  try {
+    const authToken = await getAuthToken();
+    const res = await fetch('/api/stripe/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.user.id, authToken, email: state.user.email }),
+    });
+    const data = await res.json();
+    if (data.url) window.location.href = data.url;
+    else throw new Error(data.error || 'Checkout failed');
+  } catch (e) { toast('Checkout error: ' + e.message, 'error'); }
+}
+window.subscribe = subscribe;
+
+async function manageBilling() {
+  if (!state.user) return;
+  toast('Opening billing portal…', 'info');
+  try {
+    const authToken = await getAuthToken();
+    const res = await fetch('/api/stripe/portal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.user.id, authToken }),
+    });
+    const data = await res.json();
+    if (data.url) window.location.href = data.url;
+    else throw new Error(data.error || 'Portal failed');
+  } catch (e) { toast('Billing portal error: ' + e.message, 'error'); }
+}
+window.manageBilling = manageBilling;
+
+function isSubscribed() {
+  return state.grandfathered || state.subscriptionStatus === 'active';
 }
 
 // Auto-save debounce
