@@ -132,15 +132,15 @@ async function init() {
           await loadUserSettings();
           const isNew = _justSignedUp;
           _justSignedUp = false;
-          if (_pendingCheckoutPlan) {
-            const plan = _pendingCheckoutPlan;
-            _pendingCheckoutPlan = null;
+          const plan = _pendingCheckoutPlan || (isNew ? 'pro' : null);
+          _pendingCheckoutPlan = null;
+          if (plan) {
             closeModal();
             toast(isNew ? 'Account created! Taking you to checkout…' : 'Signed in! Taking you to checkout…', 'success');
             await startCheckoutForUser(session.user, plan);
           } else {
             navigate('dashboard');
-            toast(isNew ? '🎉 Welcome to Curanta! Your account is ready.' : 'Signed in', 'success');
+            toast('Signed in', 'success');
           }
         } else if (event === 'SIGNED_OUT') {
           state.user = null;
