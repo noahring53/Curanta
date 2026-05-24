@@ -331,8 +331,8 @@ function handleClick(e) {
 
 function handleSubmit(e) {
   const form = e.target;
-  if (form.id === 'auth-form') { e.preventDefault(); submitAuth(form); }
-  else if (form.id === 'magic-link-form') { e.preventDefault(); submitMagicLink(form); }
+  if (form.id === 'login-form')  { e.preventDefault(); submitLogin(e); }
+  else if (form.id === 'signup-form') { e.preventDefault(); submitSignup(e); }
   else if (form.id === 'source-form') { e.preventDefault(); submitAddSource(form); }
   else if (form.id === 'comment-form') { e.preventDefault(); submitComment(form); }
   else if (form.id === 'voice-url-form') { e.preventDefault(); fetchVoiceURL(form); }
@@ -731,67 +731,89 @@ function renderLanding() {
 }
 
 // ── AUTH MODAL ────────────────────────────────────────────────────────────────
-function showAuthModal(tab = 'login') {
+function showAuthModal(tab = 'signup') {
   const modal = document.getElementById('modal-root');
   if (!modal) return;
   const configured = !!(cfg.supabaseUrl && cfg.supabaseAnonKey);
   modal.innerHTML = `
   <div class="modal-overlay" id="modal-overlay">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title">Welcome to Curanta</div>
-          <div class="modal-sub">Sign in to access the newsletter builder</div>
-        </div>
-        <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
+    <div class="modal auth-modal">
+      <button class="auth-close-btn btn-icon" data-action="close-modal" aria-label="Close">×</button>
+
+      <div class="auth-brand">
+        <span class="auth-brand-mark">✦</span>
+        <span class="auth-brand-name">Curanta</span>
       </div>
-      ${!configured ? `<div class="modal-body"><div class="auth-error">⚠️ Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to your .env file. For demo purposes, <button style="color:var(--accent);text-decoration:underline;background:none;border:none;cursor:pointer;font-size:inherit;" onclick="state.user={email:'demo@example.com',id:'demo'};closeModal();navigate('dashboard')">continue as demo user</button>.</div></div>` : `
+
+      <div id="auth-headline" class="auth-headline">
+        ${tab === 'signup'
+          ? '<div class="auth-headline-title">Start your free trial</div><div class="auth-headline-sub">No credit card required · 7-day free trial</div>'
+          : '<div class="auth-headline-title">Welcome back</div><div class="auth-headline-sub">Sign in to your account</div>'}
+      </div>
+
+      ${!configured ? `
+      <div class="auth-body">
+        <div class="auth-error" style="margin-bottom:14px">⚠️ Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to your environment.</div>
+        <button class="btn btn-outline" style="width:100%;justify-content:center" onclick="state.user={email:'demo@example.com',id:'demo'};closeModal();navigate('dashboard')">Continue as demo user →</button>
+      </div>
+      ` : `
       <div class="auth-tabs">
-        <div class="auth-tab ${tab === 'login' ? 'active' : ''}" data-action="auth-tab" data-tab="login">Sign in</div>
-        <div class="auth-tab ${tab === 'signup' ? 'active' : ''}" data-action="auth-tab" data-tab="signup">Create account</div>
+        <button class="auth-tab ${tab === 'login' ? 'active' : ''}" data-action="auth-tab" data-tab="login">Sign in</button>
+        <button class="auth-tab ${tab === 'signup' ? 'active' : ''}" data-action="auth-tab" data-tab="signup">Create account</button>
       </div>
-      <div class="modal-body">
-        <div id="auth-panel-login" style="display:${tab === 'login' ? 'block' : 'none'}">
-          <form id="auth-form" data-mode="login" class="auth-form">
-            <div id="auth-login-error" class="auth-error hidden"></div>
+
+      <div class="auth-body">
+
+        <!-- ── Login panel ── -->
+        <div id="auth-panel-login" ${tab !== 'login' ? 'hidden' : ''}>
+          <form id="login-form" class="auth-form" novalidate>
+            <div class="auth-inline-error" id="login-error" hidden></div>
             <div class="form-group">
               <label class="form-label" for="login-email">Email</label>
-              <input id="login-email" name="email" type="email" class="input" placeholder="you@example.com" required autocomplete="email">
+              <input id="login-email" type="email" class="input" placeholder="you@example.com" autocomplete="email">
             </div>
             <div class="form-group">
               <label class="form-label" for="login-password">Password</label>
-              <input id="login-password" name="password" type="password" class="input" placeholder="••••••••" required autocomplete="current-password">
+              <div class="pw-field-wrap">
+                <input id="login-password" type="password" class="input" placeholder="••••••••" autocomplete="current-password">
+                <button type="button" class="pw-toggle" onclick="togglePw('login-password',this)">Show</button>
+              </div>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Sign in →</button>
-            <button type="button" class="btn-ghost" style="font-size:12px;color:var(--text-3);width:100%;text-align:center;padding:6px;margin-top:4px" data-action="forgot-password">Forgot password?</button>
+            <button type="submit" id="login-submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px">Sign in →</button>
           </form>
-          <div style="margin:14px 0">
-            <div class="auth-divider">or</div>
-          </div>
-          <form id="magic-link-form" class="auth-form">
-            <input id="magic-email" name="email" type="email" class="input" placeholder="Email for magic link" required>
-            <button type="submit" class="btn btn-outline" style="width:100%;justify-content:center">✉️ Send magic link</button>
-          </form>
+          <button class="auth-link-btn" data-action="forgot-password">Forgot password?</button>
+          <div class="auth-divider">or</div>
+          <button class="btn btn-outline" id="magic-login-btn" style="width:100%;justify-content:center" onclick="sendMagicLink('login')">✉️ Email me a magic link</button>
         </div>
-        <div id="auth-panel-signup" style="display:${tab === 'signup' ? 'block' : 'none'}">
-          <form id="auth-form" data-mode="signup" class="auth-form">
-            <div id="auth-signup-error" class="auth-error hidden"></div>
+
+        <!-- ── Signup panel ── -->
+        <div id="auth-panel-signup" ${tab !== 'signup' ? 'hidden' : ''}>
+          <form id="signup-form" class="auth-form" novalidate>
+            <div class="auth-inline-error" id="signup-error" hidden></div>
             <div class="form-group">
               <label class="form-label" for="signup-email">Email</label>
-              <input id="signup-email" name="email" type="email" class="input" placeholder="you@example.com" required autocomplete="email">
+              <input id="signup-email" type="email" class="input" placeholder="you@example.com" autocomplete="email">
             </div>
             <div class="form-group">
               <label class="form-label" for="signup-password">Password</label>
-              <input id="signup-password" name="password" type="password" class="input" placeholder="Min. 8 characters" required minlength="8" autocomplete="new-password">
+              <div class="pw-field-wrap">
+                <input id="signup-password" type="password" class="input" placeholder="Min. 8 characters" autocomplete="new-password" oninput="checkPwStrength(this)">
+                <button type="button" class="pw-toggle" onclick="togglePw('signup-password',this)">Show</button>
+              </div>
+              <div id="pw-strength"></div>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Create account →</button>
-            <p class="auth-note">By signing up you agree to our Terms of Service and Privacy Policy.</p>
+            <button type="submit" id="signup-submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px">Start free trial →</button>
+            <p class="auth-note">By creating an account you agree to our <a href="/terms" style="color:var(--accent)">Terms</a> and <a href="/privacy" style="color:var(--accent)">Privacy Policy</a>.</p>
           </form>
+          <div class="auth-divider">or</div>
+          <button class="btn btn-outline" id="magic-signup-btn" style="width:100%;justify-content:center" onclick="sendMagicLink('signup')">✉️ Continue with magic link</button>
         </div>
+
       </div>`}
     </div>
   </div>`;
-  modal.querySelector('#modal-overlay')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+  setTimeout(() => document.getElementById(tab === 'login' ? 'login-email' : 'signup-email')?.focus(), 80);
 }
 
 function closeModal() {
@@ -801,8 +823,13 @@ function closeModal() {
 
 function switchAuthTab(tab) {
   document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-  document.getElementById('auth-panel-login').style.display = tab === 'login' ? 'block' : 'none';
-  document.getElementById('auth-panel-signup').style.display = tab === 'signup' ? 'block' : 'none';
+  document.getElementById('auth-panel-login')?.toggleAttribute('hidden', tab !== 'login');
+  document.getElementById('auth-panel-signup')?.toggleAttribute('hidden', tab !== 'signup');
+  const hl = document.getElementById('auth-headline');
+  if (hl) hl.innerHTML = tab === 'signup'
+    ? '<div class="auth-headline-title">Start your free trial</div><div class="auth-headline-sub">No credit card required · 7-day free trial</div>'
+    : '<div class="auth-headline-title">Welcome back</div><div class="auth-headline-sub">Sign in to your account</div>';
+  setTimeout(() => document.getElementById(tab === 'login' ? 'login-email' : 'signup-email')?.focus(), 50);
 }
 
 function showForgotPasswordForm() {
@@ -890,38 +917,142 @@ function showUpdatePasswordModal() {
   });
 }
 
-async function submitAuth(form) {
-  const mode = form.dataset.mode;
-  const emailEl = form.querySelector('[name="email"]');
-  const passEl = form.querySelector('[name="password"]');
-  const errEl = form.querySelector('.auth-error');
-  if (!sb) return;
-  const email = emailEl.value.trim();
-  const password = passEl?.value;
-  try {
-    let result;
-    if (mode === 'signup') result = await sb.auth.signUp({ email, password });
-    else result = await sb.auth.signInWithPassword({ email, password });
-    if (result.error) throw result.error;
-    if (mode === 'signup' && result.data?.user && !result.data?.session) {
-      if (errEl) { errEl.classList.remove('hidden'); errEl.textContent = '✓ Check your email to confirm your account.'; errEl.style.color = 'var(--green)'; }
-    } else {
-      closeModal();
-      toast('Signed in successfully', 'success');
-    }
-  } catch (e) {
-    if (errEl) { errEl.classList.remove('hidden'); errEl.textContent = e.message; }
-  }
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+function friendlyAuthError(msg) {
+  if (!msg) return 'Something went wrong. Please try again.';
+  if (/invalid login credentials/i.test(msg)) return 'Incorrect email or password.';
+  if (/email not confirmed/i.test(msg)) return 'Please confirm your email first — check your inbox.';
+  if (/already registered/i.test(msg)) return 'An account with this email already exists. Try signing in instead.';
+  if (/password should be/i.test(msg)) return 'Password must be at least 8 characters.';
+  if (/rate limit/i.test(msg)) return 'Too many attempts. Please wait a moment and try again.';
+  return msg;
 }
-
-async function submitMagicLink(form) {
-  const email = form.querySelector('[name="email"]').value.trim();
+function showAuthError(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.removeAttribute('hidden');
+}
+function clearAuthError(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = '';
+  el.setAttribute('hidden', '');
+}
+function setAuthBtn(id, loading, text) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? `<span class="spinner" style="width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:6px"></span>${text}`
+    : text;
+}
+function togglePw(inputId, btn) {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
+function checkPwStrength(input) {
+  const el = document.getElementById('pw-strength');
+  if (!el) return;
+  const v = input.value;
+  if (!v) { el.innerHTML = ''; return; }
+  const score = [v.length >= 8, /[A-Z]/.test(v), /[0-9]/.test(v), /[^a-zA-Z0-9]/.test(v)].filter(Boolean).length;
+  const labels = ['', 'Weak', 'Fair', 'Good', 'Strong'];
+  const colors = ['', 'var(--red)', 'var(--amber)', 'var(--accent)', 'var(--green)'];
+  el.innerHTML = `<div style="display:flex;gap:3px;align-items:center;margin-top:6px">
+    ${[1,2,3,4].map(i => `<div style="height:3px;flex:1;border-radius:99px;background:${i<=score?colors[score]:'var(--bg-5)'}"></div>`).join('')}
+    <span style="font-size:11px;color:${colors[score]};margin-left:6px;min-width:38px">${labels[score]}</span>
+  </div>`;
+}
+function showCheckEmailScreen(email) {
+  const hl = document.getElementById('auth-headline');
+  if (hl) hl.innerHTML = '<div class="auth-headline-title">Check your inbox</div><div class="auth-headline-sub">Almost there — one click to confirm</div>';
+  document.querySelectorAll('.auth-tabs, .auth-tab').forEach(el => el.setAttribute('hidden', ''));
+  const body = document.querySelector('.auth-body');
+  if (!body) return;
+  body.innerHTML = `
+  <div style="text-align:center;padding:8px 0 16px">
+    <div style="font-size:52px;margin-bottom:18px;line-height:1">📬</div>
+    <div style="font-size:15px;font-weight:700;margin-bottom:10px">Confirmation link sent</div>
+    <div style="font-size:13px;color:var(--text-2);line-height:1.7;margin-bottom:24px">
+      We sent a link to<br><strong style="color:var(--text-1)">${escHtml(email)}</strong>.<br>
+      Click it to activate your account and start your free trial.
+    </div>
+    <div style="font-size:12px;color:var(--text-3)">
+      Didn't receive it? Check your spam folder, or
+      <button style="color:var(--accent);text-decoration:underline;background:none;border:none;cursor:pointer;font-size:inherit;padding:0"
+        onclick="resendConfirmation('${escHtml(email)}')">resend the email</button>.
+    </div>
+  </div>`;
+}
+async function resendConfirmation(email) {
   if (!sb || !email) return;
+  try {
+    await sb.auth.resend({ type: 'signup', email });
+    toast('Confirmation email resent — check your inbox', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function sendMagicLink(panel) {
+  const emailId = panel === 'login' ? 'login-email' : 'signup-email';
+  const btnId   = panel === 'login' ? 'magic-login-btn' : 'magic-signup-btn';
+  const email = document.getElementById(emailId)?.value.trim();
+  if (!email) { toast('Enter your email above first', 'warn'); document.getElementById(emailId)?.focus(); return; }
+  if (!sb) return;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
   try {
     const { error } = await sb.auth.signInWithOtp({ email });
     if (error) throw error;
-    toast('Magic link sent! Check your inbox.', 'success');
-  } catch (e) { toast(e.message, 'error'); }
+    showCheckEmailScreen(email);
+  } catch(err) {
+    toast(err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '✉️ Email me a magic link'; }
+  }
+}
+
+async function submitLogin(e) {
+  e.preventDefault();
+  const email    = document.getElementById('login-email')?.value.trim();
+  const password = document.getElementById('login-password')?.value;
+  clearAuthError('login-error');
+  if (!email)    { showAuthError('login-error', 'Please enter your email.'); return; }
+  if (!password) { showAuthError('login-error', 'Please enter your password.'); return; }
+  setAuthBtn('login-submit', true, 'Signing in…');
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    closeModal();
+    toast('Signed in', 'success');
+  } catch(err) {
+    showAuthError('login-error', friendlyAuthError(err.message));
+    setAuthBtn('login-submit', false, 'Sign in →');
+  }
+}
+
+async function submitSignup(e) {
+  e.preventDefault();
+  const email    = document.getElementById('signup-email')?.value.trim();
+  const password = document.getElementById('signup-password')?.value;
+  clearAuthError('signup-error');
+  if (!email)                        { showAuthError('signup-error', 'Please enter your email.'); return; }
+  if (!password || password.length < 8) { showAuthError('signup-error', 'Password must be at least 8 characters.'); return; }
+  setAuthBtn('signup-submit', true, 'Creating account…');
+  try {
+    const { data, error } = await sb.auth.signUp({ email, password });
+    if (error) throw error;
+    if (data?.user && !data?.session) {
+      showCheckEmailScreen(email);
+    } else {
+      closeModal();
+      toast('Account created! Welcome to Curanta.', 'success');
+    }
+  } catch(err) {
+    showAuthError('signup-error', friendlyAuthError(err.message));
+    setAuthBtn('signup-submit', false, 'Start free trial →');
+  }
 }
 
 async function handleLogout() {
