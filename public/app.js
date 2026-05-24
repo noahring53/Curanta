@@ -253,6 +253,29 @@ function handleClick(e) {
     case 'auth-tab':        switchAuthTab(d.tab); break;
     case 'logout':          handleLogout(); break;
     case 'subscribe-multi': subscribeMulti(); break;
+    case 'save-section-layout': {
+      const raw = document.getElementById('sections-setup-input')?.value || '';
+      const sections = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+        .map(name => ({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), name }));
+      if (!sections.length) { toast('Enter at least one section name', 'warn'); break; }
+      setUserSections(sections);
+      toast(`${sections.length} section${sections.length === 1 ? '' : 's'} saved`, 'success');
+      break;
+    }
+    case 'import-builder-sections': {
+      const secs = state.newsletter.sectionOrder
+        .map(id => ({ id, name: state.newsletter.sectionMeta[id]?.name || id }));
+      if (!secs.length) { toast('No sections in current newsletter', 'warn'); break; }
+      setUserSections(secs);
+      toast(`Imported ${secs.length} sections from builder`, 'success');
+      break;
+    }
+    case 'reset-section-layout': {
+      if (!confirm('Clear all section defaults? Your saved prompts will remain but the section list will be reset.')) break;
+      setUserSections([]);
+      toast('Section layout reset', 'success');
+      break;
+    }
     case 'toggle-feed':     toggleFeed(d.feedId); break;
     case 'remove-feed':     removeFeed(d.feedId); break;
     case 'remove-article':  removeArticle(d.feedId, d.articleId); break;
@@ -1343,13 +1366,6 @@ function renderSettingsPage() {
     { id: 'neutral-newsroom', label: 'Neutral Newsroom' },
     { id: 'sharp-political', label: 'Sharp Political' },
   ];
-  const sectionTypes = [
-    { key: 'briefing', label: "Today's Briefing", desc: 'The opening section — a quick stat-first bulleted rundown of top stories with source links.', placeholder: 'e.g. Lead each bullet with the sharpest number from the article. Keep each line under 100 chars. End with the source URL.' },
-    { key: 'lead',     label: 'Lead Story',       desc: 'The main story — a full write-up with context, analysis, and your take.', placeholder: 'e.g. Open with the key insight, not the headline. Include a "Why it matters" paragraph. Keep to 150-200 words.' },
-    { key: 'hits',     label: 'Quick Hits',       desc: 'Short 1-2 sentence summaries of secondary stories.', placeholder: 'e.g. One bold sentence with the key fact, then one sentence of context. End with a link.' },
-    { key: 'cta',      label: 'Sponsor / CTA',    desc: 'Call-to-action or sponsor message.', placeholder: 'e.g. Write a 2-sentence sponsor read that feels native, not salesy. Include a clear action.' },
-    { key: 'generic',  label: 'Custom Sections',  desc: 'Default prompt for any custom sections you create.', placeholder: 'e.g. Write in a punchy, informative style. Lead with the most surprising fact.' },
-  ];
 
   return `
 <div class="app-shell">
@@ -1430,21 +1446,48 @@ function renderSettingsPage() {
       </div>
 
       <!-- ── SECTION DEFAULTS ── -->
-      <div class="settings-section">
+      ${(() => {
+        const userSections = getUserSections();
+        const hasBuilderSections = state.newsletter.sectionOrder?.length > 0;
+        return `<div class="settings-section">
         <div class="settings-section-title">Section Defaults</div>
-        <div class="settings-section-sub">Default AI instructions for each section type. Pre-filled on every new newsletter so you never start from scratch.</div>
-        <div style="display:flex;flex-direction:column;gap:20px;margin-top:16px">
-          ${sectionTypes.map(s => `
-          <div>
-            <div style="font-size:13px;font-weight:600;margin-bottom:2px">${s.label}</div>
-            <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">${s.desc}</div>
-            <textarea class="input default-prompt-input" data-type="${s.key}" rows="2"
-              style="width:100%;resize:vertical;font-size:12px"
-              placeholder="${escHtml(s.placeholder)}"
-            >${escHtml(state.defaultPrompts?.[s.key] || '')}</textarea>
-          </div>`).join('')}
+        <div class="settings-section-sub">Default AI instructions for each of your newsletter's sections — pre-filled on every new newsletter so you never start from scratch.</div>
+        ${userSections.length === 0 ? `
+        <div style="padding:28px 24px;border:1px dashed var(--border-md);border-radius:var(--r-md);margin-top:16px;text-align:center">
+          <div style="font-size:28px;margin-bottom:10px">📋</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:6px">Define your newsletter's sections first</div>
+          <div style="font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:20px;max-width:400px;margin-inline:auto">
+            Enter the names of your sections, one per line — e.g. "Today's Briefing", "Lead Story", "Quick Hits", "Sponsor".<br>
+            Or import them directly from the builder.
+          </div>
+          <textarea id="sections-setup-input" class="input" rows="5"
+            style="width:100%;max-width:400px;display:block;margin:0 auto 14px;text-align:left;font-size:13px;resize:vertical"
+            placeholder="Today's Briefing&#10;Lead Story&#10;Quick Hits&#10;Sponsor / CTA"></textarea>
+          <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-primary" data-action="save-section-layout">Save sections</button>
+            ${hasBuilderSections ? `<button class="btn btn-outline" data-action="import-builder-sections">Import from builder</button>` : ''}
+          </div>
         </div>
-      </div>
+        ` : `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 16px">
+          <div style="font-size:12px;color:var(--text-3)">${userSections.length} section${userSections.length === 1 ? '' : 's'} configured</div>
+          <div style="display:flex;gap:6px">
+            ${hasBuilderSections ? `<button class="btn btn-outline btn-sm" data-action="import-builder-sections">Sync from builder</button>` : ''}
+            <button class="btn btn-ghost btn-sm" data-action="reset-section-layout" style="color:var(--red)">Reset</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          ${userSections.map(s => `
+          <div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px">${escHtml(s.name)}</div>
+            <textarea class="input default-prompt-input" data-type="${s.id}" rows="2"
+              style="width:100%;resize:vertical;font-size:12px"
+              placeholder="e.g. Write each point as a punchy single sentence. Lead with the most surprising number."
+            >${escHtml(state.defaultPrompts?.[s.id] || '')}</textarea>
+          </div>`).join('')}
+        </div>`}
+      </div>`;
+      })()}
 
       ` : tab === 'appearance' ? `
 
@@ -2465,9 +2508,23 @@ function effectivePrompt(sectionId) {
   // Per-issue prompt takes precedence; fall back to the matching section default
   const issuePrompt = state.newsletter.prompts[sectionId] || '';
   if (issuePrompt) return issuePrompt;
+  // Try direct section ID match first (user-defined sections)
+  if (state.defaultPrompts?.[sectionId]) return state.defaultPrompts[sectionId];
+  // Fall back to type-based key (legacy / built-in sections)
   const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
   const typeToKey = { briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta', generic: 'generic' };
   return state.defaultPrompts?.[typeToKey[type] || 'generic'] || '';
+}
+
+function getUserSections() {
+  return state.defaultPrompts?._sections || [];
+}
+
+function setUserSections(sections) {
+  if (!state.defaultPrompts) state.defaultPrompts = {};
+  state.defaultPrompts._sections = sections;
+  scheduleSettingsSave();
+  render();
 }
 
 async function applyPrompt(sectionId) {

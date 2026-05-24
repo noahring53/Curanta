@@ -159,7 +159,13 @@ app.post('/api/stripe/checkout', async (req, res) => {
   const { userId, authToken, email, plan } = req.body; // plan: 'pro' (default) | 'multi'
   if (!userId || !authToken) return res.status(400).json({ error: 'Missing auth' });
 
-  const priceId = (plan === 'multi' && STRIPE_MULTI_PRICE_ID) ? STRIPE_MULTI_PRICE_ID : STRIPE_PRICE_ID;
+  let priceId;
+  if (plan === 'multi') {
+    if (!STRIPE_MULTI_PRICE_ID) return res.status(503).json({ error: 'Multi-publication plan not yet available. Please contact support.' });
+    priceId = STRIPE_MULTI_PRICE_ID;
+  } else {
+    priceId = STRIPE_PRICE_ID;
+  }
   if (!priceId) return res.status(503).json({ error: 'Stripe price not configured' });
 
   try {
