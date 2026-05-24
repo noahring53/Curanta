@@ -60,6 +60,9 @@ const state = {
   voiceUrls: [],
   voiceUrlLoading: false,
   _expandedPrompts: {},     // transient: which section prompt boxes are open
+  // Multi-publication
+  publications: [],          // loaded from DB for grandfathered users
+  currentPublicationId: null, // null = default (user_settings), uuid = publications table row
   // Persistence
   newsletterId: null,       // UUID of the current newsletter in Supabase
   saving: false,
@@ -236,6 +239,10 @@ function handleClick(e) {
   switch (action) {
     case 'navigate':        navigate(d.view); break;
     case 'show-pub-upgrade': document.querySelector('.pub-enterprise-card')?.scrollIntoView({behavior:'smooth',block:'center'}); document.querySelector('.pub-enterprise-card')?.classList.add('pub-enterprise-card-highlight'); setTimeout(()=>document.querySelector('.pub-enterprise-card')?.classList.remove('pub-enterprise-card-highlight'),1800); break;
+    case 'new-publication':    showNewPublicationModal(); break;
+    case 'switch-publication': switchPublication(d.id || null); break;
+    case 'delete-publication': deletePublication(d.id); break;
+    case 'rename-publication': renamePublication(d.id); break;
     case 'open-builder':    navigate('builder'); break;
     case 'open-newsletter': navigate('builder', { id: d.id }); break;
     case 'show-auth':       showAuthModal(d.tab || 'login'); break;
@@ -1177,6 +1184,68 @@ function renderSubscriptionPage() {
 
 function renderPublicationsPage() {
   const email = state.user?.email || '';
+
+  if (state.grandfathered) {
+    // ── Real multi-publication UI ────────────────────────────────────────────
+    const allPubs = [
+      // "Default" publication always first — represents user_settings
+      { id: null, name: 'Default', isDefault: true },
+      ...state.publications,
+    ];
+    return `
+<div class="app-shell">
+  ${renderAppNav('publications')}
+  <div class="app-main">
+    ${renderTrialBanner()}
+    <div class="app-topbar">
+      <div class="page-title">Publications</div>
+      <button class="btn btn-primary" data-action="new-publication">+ New Publication</button>
+    </div>
+    <div class="settings-page" style="max-width:720px">
+      <p style="font-size:13px;color:var(--text-2);margin-bottom:20px;line-height:1.6">
+        Each publication has its own brand voice, audience avatar, tone, and prompt defaults.
+        Switch between them below — Settings will apply to whichever is active.
+      </p>
+      <div class="pub-list">
+        ${allPubs.map(pub => {
+          const isActive = pub.id === state.currentPublicationId;
+          const initial = pub.name[0].toUpperCase();
+          return `
+        <div class="pub-card ${isActive ? 'pub-card-active' : ''}">
+          <div class="pub-card-left">
+            <div class="pub-avatar" style="${pub.isDefault ? 'background:var(--bg-5);color:var(--text-2)' : ''}">${initial}</div>
+            <div>
+              <div class="pub-name">${escHtml(pub.name)}${pub.isDefault ? ' <span style="font-size:11px;color:var(--text-3);font-weight:400">(default)</span>' : ''}</div>
+              <div class="pub-meta">${isActive ? '<span class="badge badge-accent" style="font-size:10px">Active</span>' : 'Click to switch'}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${isActive
+              ? `<button class="btn btn-outline btn-sm" data-action="navigate" data-view="settings">Edit settings →</button>`
+              : `<button class="btn btn-outline btn-sm" data-action="switch-publication" data-id="${pub.id || ''}">Switch</button>`
+            }
+            ${!pub.isDefault ? `
+            <button class="btn-icon" title="Rename" data-action="rename-publication" data-id="${pub.id}" style="font-size:13px">✎</button>
+            <button class="btn-icon" title="Delete" data-action="delete-publication" data-id="${pub.id}" style="font-size:13px;color:var(--text-3)">🗑</button>` : ''}
+          </div>
+        </div>`;
+        }).join('')}
+      </div>
+
+      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--r-md);padding:18px 20px;margin-top:8px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px">How it works</div>
+        <div style="font-size:13px;color:var(--text-2);line-height:1.7">
+          The <strong>active</strong> publication's brand voice, audience avatar, and prompt defaults are used for every newsletter you build.
+          Switch publications here, then configure its settings on the <a href="#" data-action="navigate" data-view="settings" style="color:var(--accent)">Settings page</a>.
+          Newsletters and sources are currently shared across publications.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`;
+  }
+
+  // ── Enterprise upgrade wall (non-grandfathered) ──────────────────────────
   const pubName = state.brandVoice
     ? (state.brandVoice.match(/newsletter called ["']?([^"'\n,]+)/i)?.[1] || 'My Publication')
     : 'My Publication';
@@ -1189,9 +1258,7 @@ function renderPublicationsPage() {
       <div class="page-title">Publications</div>
     </div>
     <div class="settings-page" style="max-width:720px">
-
       <div class="pub-list">
-        <!-- Current publication -->
         <div class="pub-card pub-card-active">
           <div class="pub-card-left">
             <div class="pub-avatar">${(email[0] || 'P').toUpperCase()}</div>
@@ -1202,8 +1269,6 @@ function renderPublicationsPage() {
           </div>
           <button class="btn btn-outline btn-sm" data-action="navigate" data-view="settings">Edit settings →</button>
         </div>
-
-        <!-- Add publication — upgrade wall -->
         <div class="pub-card pub-card-add" data-action="show-pub-upgrade">
           <div class="pub-card-left">
             <div class="pub-avatar pub-avatar-add">+</div>
@@ -1215,7 +1280,6 @@ function renderPublicationsPage() {
           <span class="badge badge-accent" style="font-size:11px;padding:4px 10px">Enterprise</span>
         </div>
       </div>
-
       <div class="pub-enterprise-card">
         <div class="pub-ent-icon">🏢</div>
         <div>
@@ -1235,7 +1299,6 @@ function renderPublicationsPage() {
           </div>
         </div>
       </div>
-
     </div>
   </div>
 </div>`;
@@ -1414,6 +1477,10 @@ function renderAppNav(active) {
       <div class="app-nav-logo-icon">L</div>
       Curanta
     </div>
+    ${state.grandfathered && state.currentPublicationId ? `
+    <div class="nav-pub-chip" data-action="navigate" data-view="publications" title="Switch publication">
+      📰 ${escHtml(currentPublicationName())}
+    </div>` : ''}
   </div>
   <div class="nav-items">
     <div class="nav-item ${active === 'dashboard' ? 'active' : ''}" data-action="navigate" data-view="dashboard">
@@ -3273,6 +3340,21 @@ async function saveUserSettings() {
     updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id' });
   if (error) console.error('Settings save error:', error);
+
+  // If a publication is active, also persist its settings to the publications table
+  if (state.currentPublicationId) {
+    const pubFields = {
+      brand_voice:     state.brandVoice      || '',
+      audience_avatar: state.audienceAvatar  || '',
+      tone:            state.tone            || 'punchy-executive',
+      default_prompts: state.defaultPrompts  || {},
+    };
+    await sb.from('publications').update(pubFields)
+      .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
+    // Keep local cache in sync
+    const idx = state.publications.findIndex(p => p.id === state.currentPublicationId);
+    if (idx >= 0) state.publications[idx] = { ...state.publications[idx], ...pubFields };
+  }
 }
 
 async function loadUserSettings() {
@@ -3294,6 +3376,145 @@ async function loadUserSettings() {
   if (data.grandfathered)                 state.grandfathered        = data.grandfathered;
   if (data.generations_this_month != null) state.generationsThisMonth = data.generations_this_month;
   if (data.trial_ends_at)                 state.trialEndsAt          = data.trial_ends_at;
+
+  // Load publications for grandfathered users, then apply active publication settings
+  if (data.grandfathered) {
+    await loadPublications();
+    applyCurrentPublication();
+  }
+}
+
+async function loadPublications() {
+  if (!sb || !state.user) return;
+  const { data } = await sb.from('publications')
+    .select('*').eq('user_id', state.user.id).order('created_at');
+  if (data) state.publications = data;
+}
+
+function applyCurrentPublication() {
+  if (!state.currentPublicationId) return;
+  const pub = state.publications.find(p => p.id === state.currentPublicationId);
+  if (!pub) { state.currentPublicationId = null; return; }
+  state.brandVoice      = pub.brand_voice      || '';
+  state.audienceAvatar  = pub.audience_avatar  || '';
+  state.tone            = pub.tone             || state.tone;
+  state.defaultPrompts  = pub.default_prompts  || {};
+}
+
+function currentPublicationName() {
+  if (!state.currentPublicationId) return 'Default';
+  return state.publications.find(p => p.id === state.currentPublicationId)?.name || 'Default';
+}
+
+// ── Publication management ────────────────────────────────────────────────────
+function showNewPublicationModal() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  modal.innerHTML = `
+  <div class="modal-overlay" id="pub-modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">New Publication</div>
+          <div class="modal-sub">Each publication has its own brand voice, audience, and prompt defaults.</div>
+        </div>
+        <button class="btn-icon" data-action="close-modal" style="font-size:18px">×</button>
+      </div>
+      <div class="modal-body">
+        <form id="new-pub-form" class="auth-form">
+          <div id="new-pub-error" class="auth-error hidden"></div>
+          <div class="form-group">
+            <label class="form-label">Publication name</label>
+            <input id="new-pub-name" type="text" class="input" placeholder="e.g. The Weekly Brief" required maxlength="80" autofocus>
+          </div>
+          <p style="font-size:12px;color:var(--text-3);line-height:1.6;margin-top:4px">
+            Starting fresh — you can configure brand voice, audience avatar, and default prompts in Settings after switching.
+          </p>
+          <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:8px">Create publication →</button>
+        </form>
+      </div>
+    </div>
+  </div>`;
+  modal.querySelector('#pub-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+  document.getElementById('new-pub-form')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = document.getElementById('new-pub-name')?.value.trim();
+    const errEl = document.getElementById('new-pub-error');
+    const btn = e.target.querySelector('button[type="submit"]');
+    if (!name) return;
+    btn.disabled = true; btn.textContent = 'Creating…';
+    await createPublication(name, errEl, btn);
+  });
+  document.getElementById('new-pub-name')?.focus();
+}
+
+async function createPublication(name, errEl, btn) {
+  if (!sb || !state.user) return;
+  // Save current publication settings before switching
+  await saveUserSettings();
+  const { data, error } = await sb.from('publications').insert({
+    user_id:         state.user.id,
+    name,
+    brand_voice:     '',
+    audience_avatar: '',
+    tone:            'punchy-executive',
+    default_prompts: {},
+  }).select().single();
+  if (error) {
+    if (errEl) { errEl.classList.remove('hidden'); errEl.textContent = error.message; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Create publication →'; }
+    return;
+  }
+  state.publications.push(data);
+  closeModal();
+  await switchPublication(data.id);
+  toast(`✓ Switched to "${name}" — configure its settings below.`, 'success');
+}
+
+async function switchPublication(id) {
+  // Save current before switching
+  await saveUserSettings();
+  state.currentPublicationId = id;
+  if (id === null) {
+    // Switch back to default — reload from user_settings
+    const { data } = await sb.from('user_settings').select('*').eq('user_id', state.user.id).single();
+    if (data) {
+      state.brandVoice     = data.brand_voice      || '';
+      state.audienceAvatar = data.audience_avatar  || '';
+      state.tone           = data.tone             || 'punchy-executive';
+      state.defaultPrompts = data.default_prompts  || {};
+    }
+  } else {
+    applyCurrentPublication();
+  }
+  render();
+  toast(`Switched to "${currentPublicationName()}"`, 'success');
+}
+
+async function deletePublication(id) {
+  const pub = state.publications.find(p => p.id === id);
+  if (!pub) return;
+  if (!confirm(`Delete "${pub.name}"? This cannot be undone.`)) return;
+  const { error } = await sb.from('publications').delete().eq('id', id).eq('user_id', state.user.id);
+  if (error) { toast('Delete failed', 'error'); return; }
+  state.publications = state.publications.filter(p => p.id !== id);
+  if (state.currentPublicationId === id) {
+    await switchPublication(null); // fall back to default
+  } else {
+    render();
+  }
+  toast(`"${pub.name}" deleted`, 'success');
+}
+
+async function renamePublication(id) {
+  const pub = state.publications.find(p => p.id === id);
+  if (!pub) return;
+  const newName = window.prompt('Rename publication:', pub.name);
+  if (!newName?.trim() || newName.trim() === pub.name) return;
+  const { error } = await sb.from('publications').update({ name: newName.trim() }).eq('id', id).eq('user_id', state.user.id);
+  if (error) { toast('Rename failed', 'error'); return; }
+  pub.name = newName.trim();
+  render();
 }
 
 // ── Stripe helpers ────────────────────────────────────────────────────────────

@@ -1131,6 +1131,17 @@ input[type="color"] {
 }
 .email-footer { background: #f7f7f7; padding: 20px 32px; text-align: center; border-top: 1px solid #e5e5e5; font-size: 11px; color: #aaa; font-family: var(--font); line-height: 1.6; }
 
+/* Active publication chip in nav */
+.nav-pub-chip {
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  padding: 3px 10px 3px 8px; margin: 6px 8px 0;
+  background: var(--accent-soft); border: 1px solid rgba(129,140,248,0.25);
+  border-radius: 99px; cursor: pointer; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  transition: background 0.15s;
+}
+.nav-pub-chip:hover { background: var(--accent-soft-hover); }
+
 /* ── Publications page ───────────────────────────────────────────────────────── */
 .pub-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 32px; }
 .pub-card {
