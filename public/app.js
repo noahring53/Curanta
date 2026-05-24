@@ -71,6 +71,7 @@ const state = {
 };
 
 let _pendingCheckoutPlan = null; // set when guest clicks "Start free trial" so we redirect to Stripe after auth
+let _justSignedUp = false;       // true for one auth cycle after a new account is created
 
 const mockNewsletters = [
   { id: 'n1', title: 'Weekly Tech Digest #47', status: 'sent', sentAt: new Date(Date.now()-2*864e5).toISOString(), openRate: 24.3, clickRate: 4.1, subscribers: 8420, subject: "Apple's AI gamble, the chip race heats up, and why your inbox is about to change" },
@@ -129,13 +130,17 @@ async function init() {
         if (event === 'SIGNED_IN') {
           state.user = session.user;
           await loadUserSettings();
+          const isNew = _justSignedUp;
+          _justSignedUp = false;
           if (_pendingCheckoutPlan) {
             const plan = _pendingCheckoutPlan;
             _pendingCheckoutPlan = null;
             closeModal();
+            toast(isNew ? 'Account created! Taking you to checkout…' : 'Signed in! Taking you to checkout…', 'success');
             await startCheckoutForUser(session.user, plan);
           } else {
             navigate('dashboard');
+            toast(isNew ? '🎉 Welcome to Curanta! Your account is ready.' : 'Signed in', 'success');
           }
         } else if (event === 'SIGNED_OUT') {
           state.user = null;
@@ -986,26 +991,49 @@ function checkPwStrength(input) {
   </div>`;
 }
 function showCheckEmailScreen(email) {
-  const hl = document.getElementById('auth-headline');
-  if (hl) hl.innerHTML = '<div class="auth-headline-title">Check your inbox</div><div class="auth-headline-sub">Almost there — one click to confirm</div>';
-  document.querySelectorAll('.auth-tabs, .auth-tab').forEach(el => el.setAttribute('hidden', ''));
-  const body = document.querySelector('.auth-body');
-  if (!body) return;
-  body.innerHTML = `
-  <div style="text-align:center;padding:8px 0 16px">
-    <div style="font-size:52px;margin-bottom:18px;line-height:1">📬</div>
-    <div style="font-size:15px;font-weight:700;margin-bottom:10px">Confirmation link sent</div>
-    <div style="font-size:13px;color:var(--text-2);line-height:1.7;margin-bottom:24px">
-      We sent a link to<br><strong style="color:var(--text-1)">${escHtml(email)}</strong>.<br>
-      Click it to activate your account and start your free trial.
-    </div>
-    <div style="font-size:12px;color:var(--text-3)">
-      Didn't receive it? Check your spam folder, or
-      <button style="color:var(--accent);text-decoration:underline;background:none;border:none;cursor:pointer;font-size:inherit;padding:0"
-        onclick="resendConfirmation('${escHtml(email)}')">resend the email</button>.
+  // Replace the entire modal — never depends on existing DOM state, always visible
+  const modal = document.getElementById('modal-root');
+  if (!modal) { toast('Account created! Check your email to confirm.', 'success'); return; }
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal auth-modal" style="text-align:center;padding:44px 36px 36px">
+      <div style="font-size:56px;line-height:1;margin-bottom:20px">📬</div>
+      <div style="font-size:21px;font-weight:800;letter-spacing:-0.03em;margin-bottom:10px">Check your inbox</div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.75;margin-bottom:28px">
+        We sent a confirmation link to<br>
+        <strong style="color:var(--text-1)">${escHtml(email)}</strong>.<br>
+        Click it to activate your account${_pendingCheckoutPlan ? ' and start your free trial' : ''}.
+      </div>
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">
+        Didn't get it? Check your spam folder, or
+        <button style="color:var(--accent);text-decoration:underline;background:none;border:none;cursor:pointer;font-size:inherit;padding:0"
+          onclick="resendConfirmation('${escHtml(email)}')">resend the email</button>.
+      </div>
+      <button class="btn btn-ghost btn-sm" style="color:var(--text-3);width:100%;justify-content:center" data-action="close-modal">Close</button>
     </div>
   </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 }
+function showMagicLinkSentScreen(email) {
+  const modal = document.getElementById('modal-root');
+  if (!modal) { toast('Magic link sent — check your inbox!', 'success'); return; }
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal auth-modal" style="text-align:center;padding:44px 36px 36px">
+      <div style="font-size:56px;line-height:1;margin-bottom:20px">✉️</div>
+      <div style="font-size:21px;font-weight:800;letter-spacing:-0.03em;margin-bottom:10px">Magic link sent</div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.75;margin-bottom:28px">
+        We emailed a sign-in link to<br>
+        <strong style="color:var(--text-1)">${escHtml(email)}</strong>.<br>
+        Click it to sign in instantly — no password needed.
+      </div>
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">Didn't get it? Check your spam folder.</div>
+      <button class="btn btn-ghost btn-sm" style="color:var(--text-3);width:100%;justify-content:center" data-action="close-modal">Close</button>
+    </div>
+  </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+}
+
 async function resendConfirmation(email) {
   if (!sb || !email) return;
   try {
@@ -1024,7 +1052,7 @@ async function sendMagicLink(panel) {
   try {
     const { error } = await sb.auth.signInWithOtp({ email });
     if (error) throw error;
-    showCheckEmailScreen(email);
+    showMagicLinkSentScreen(email);
   } catch(err) {
     toast(err.message, 'error');
     if (btn) { btn.disabled = false; btn.textContent = '✉️ Email me a magic link'; }
@@ -1068,11 +1096,12 @@ async function submitSignup(e) {
       setAuthBtn('signup-submit', false, 'Start free trial →');
       return;
     }
+    _justSignedUp = true;
     if (data?.user && !data?.session) {
-      // Email confirmation required — onAuthStateChange will handle checkout after confirm
+      // Email confirmation required — show inbox screen; onAuthStateChange handles checkout after confirm
       showCheckEmailScreen(email);
     } else {
-      // Session available immediately — onAuthStateChange fires and handles checkout/dashboard
+      // Session available immediately — onAuthStateChange fires and handles toast + checkout/dashboard
       closeModal();
     }
   } catch(err) {
