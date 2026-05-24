@@ -132,15 +132,16 @@ async function init() {
           await loadUserSettings();
           const isNew = _justSignedUp;
           _justSignedUp = false;
-          const plan = _pendingCheckoutPlan || (isNew ? 'pro' : null);
+          const specificPlan = _pendingCheckoutPlan; // only set if user clicked a specific plan CTA
           _pendingCheckoutPlan = null;
-          if (plan && isNew) {
-            showAccountCreatedScreen(session.user.email);
-            await startCheckoutForUser(session.user, plan);
-          } else if (plan) {
+          if (isNew) {
+            // New account: show confirmation then let them choose a plan
+            showAccountCreatedThenPicker(session.user);
+          } else if (specificPlan) {
+            // Returning user clicked a specific plan CTA — go straight there
             closeModal();
             toast('Signed in! Taking you to checkout…', 'success');
-            await startCheckoutForUser(session.user, plan);
+            await startCheckoutForUser(session.user, specificPlan);
           } else {
             navigate('dashboard');
             toast('Signed in', 'success');
@@ -993,6 +994,84 @@ function checkPwStrength(input) {
     <span style="font-size:11px;color:${colors[score]};margin-left:6px;min-width:38px">${labels[score]}</span>
   </div>`;
 }
+function showAccountCreatedThenPicker(user) {
+  // Show "Account created!" for 1.2s then slide into plan picker
+  const modal = document.getElementById('modal-root');
+  if (!modal) { showPlanPickerModal(user); return; }
+  modal.innerHTML = `
+  <div class="modal-overlay">
+    <div class="modal auth-modal" style="text-align:center;padding:48px 36px 44px">
+      <div class="account-created-check">✓</div>
+      <div style="font-size:22px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Account created!</div>
+      <div style="font-size:13px;color:var(--text-2)">${escHtml(user.email)}</div>
+    </div>
+  </div>`;
+  setTimeout(() => showPlanPickerModal(user), 1200);
+}
+
+function showPlanPickerModal(user) {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  window._planPickerUser = user;
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" style="max-width:580px;padding:36px 36px 28px">
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="font-size:13px;font-weight:700;color:var(--accent);letter-spacing:0.04em;margin-bottom:8px">✦ CURANTA</div>
+        <div style="font-size:23px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Choose your plan</div>
+        <div style="font-size:13px;color:var(--text-2)">7-day free trial on both. No charge until it ends.</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+
+        <!-- Pro -->
+        <div style="padding:24px;border:1px solid var(--border-md);border-radius:var(--r-lg);display:flex;flex-direction:column">
+          <div style="font-size:12px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Curanta Pro</div>
+          <div style="font-size:32px;font-weight:900;letter-spacing:-0.03em;line-height:1;margin-bottom:4px">$49<span style="font-size:14px;font-weight:500;color:var(--text-2)">/mo</span></div>
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:18px">1 publication</div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--text-2);flex:1;margin-bottom:20px">
+            <div>✓ 500 AI generations / month</div>
+            <div>✓ Brand voice & audience avatar</div>
+            <div>✓ Section prompt defaults</div>
+            <div>✓ HTML export to any platform</div>
+            <div>✓ Unlimited newsletters & drafts</div>
+          </div>
+          <button class="btn btn-outline" style="width:100%;justify-content:center;padding:11px" onclick="pickPlan('pro')">Start Pro trial →</button>
+        </div>
+
+        <!-- Studio -->
+        <div style="padding:24px;border:2px solid var(--accent);border-radius:var(--r-lg);background:var(--accent-soft);display:flex;flex-direction:column;position:relative">
+          <div style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:3px 12px;border-radius:99px;white-space:nowrap;letter-spacing:0.06em">BEST VALUE</div>
+          <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Curanta Studio</div>
+          <div style="font-size:32px;font-weight:900;letter-spacing:-0.03em;line-height:1;margin-bottom:4px">$99<span style="font-size:14px;font-weight:500;color:var(--text-2)">/mo</span></div>
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:18px">Up to 3 publications</div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--text-2);flex:1;margin-bottom:20px">
+            <div>✓ Everything in Pro</div>
+            <div><strong style="color:var(--text-1)">✓ Up to 3 publications</strong></div>
+            <div>✓ Per-brand voice & audience avatar</div>
+            <div>✓ Separate prompt defaults per brand</div>
+            <div>✓ Switch publications instantly</div>
+          </div>
+          <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" onclick="pickPlan('multi')">Start Studio trial →</button>
+        </div>
+
+      </div>
+      <div style="text-align:center;font-size:11px;color:var(--text-3)">
+        Not sure which? Start with Pro — you can upgrade to Studio anytime from your account.
+      </div>
+    </div>
+  </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+}
+
+async function pickPlan(plan) {
+  const user = window._planPickerUser || state.user;
+  if (!user) return;
+  showAccountCreatedScreen(user.email); // progress bar while Stripe session loads
+  await startCheckoutForUser(user, plan);
+}
+window.pickPlan = pickPlan;
+
 function showWelcomeModal() {
   const modal = document.getElementById('modal-root');
   if (!modal) return;
@@ -1035,7 +1114,7 @@ function showAccountCreatedScreen(email) {
       <div class="account-created-check">✓</div>
       <div style="font-size:22px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Account created!</div>
       <div style="font-size:13px;color:var(--text-2);margin-bottom:6px">${escHtml(email)}</div>
-      <div style="font-size:13px;color:var(--text-2);margin-bottom:20px">Taking you to Stripe to start your free trial…</div>
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:20px">Opening Stripe checkout…</div>
       <div style="height:3px;background:var(--bg-4);border-radius:99px;overflow:hidden;margin-bottom:8px">
         <div id="checkout-progress-bar" style="height:100%;width:0%;background:var(--accent);border-radius:99px;transition:width 2s linear"></div>
       </div>
