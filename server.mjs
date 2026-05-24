@@ -33,10 +33,11 @@ const stripe = process.env.STRIPE_SECRET_KEY
 const SUPABASE_URL       = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY  = process.env.SUPABASE_ANON_KEY || '';
 const SUPABASE_SVC_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const STRIPE_PRICE_ID    = process.env.STRIPE_PRICE_ID || '';
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
-const APP_URL            = process.env.APP_URL || 'https://curanta-production.up.railway.app';
-const GENERATION_LIMIT   = 500; // per month per paid user
+const STRIPE_PRICE_ID       = process.env.STRIPE_PRICE_ID       || '';
+const STRIPE_MULTI_PRICE_ID = process.env.STRIPE_MULTI_PRICE_ID || ''; // $99/mo multi-pub plan
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET  || '';
+const APP_URL               = process.env.APP_URL || 'https://curanta-production.up.railway.app';
+const GENERATION_LIMIT      = 500; // per month per paid user
 
 // ── Supabase REST helpers ─────────────────────────────────────────────────────
 async function sbGet(table, filter, authToken) {
@@ -81,10 +82,13 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     if (event.type === 'checkout.session.completed') {
       const userId = obj.metadata?.user_id;
       if (userId && obj.subscription) {
-        // Retrieve subscription to get real status + trial end date
         const sub = await stripe.subscriptions.retrieve(obj.subscription);
+        // Detect which plan was purchased by comparing price IDs
+        const priceId = sub.items?.data?.[0]?.price?.id || '';
+        const plan = (STRIPE_MULTI_PRICE_ID && priceId === STRIPE_MULTI_PRICE_ID) ? 'multi' : 'pro';
         await sbPatch('user_settings', `user_id=eq.${userId}`, {
-          subscription_status: sub.status, // 'trialing' or 'active'
+          subscription_status: sub.status,
+          subscription_plan: plan,
           stripe_customer_id: obj.customer,
           trial_ends_at: sub.trial_end
             ? new Date(sub.trial_end * 1000).toISOString()
@@ -94,8 +98,11 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     } else if (event.type === 'customer.subscription.updated') {
       const validStatuses = ['active', 'trialing'];
       const status = validStatuses.includes(obj.status) ? obj.status : 'inactive';
+      const priceId = obj.items?.data?.[0]?.price?.id || '';
+      const plan = (STRIPE_MULTI_PRICE_ID && priceId === STRIPE_MULTI_PRICE_ID) ? 'multi' : 'pro';
       await sbPatch('user_settings', `stripe_customer_id=eq.${encodeURIComponent(obj.customer)}`, {
         subscription_status: status,
+        subscription_plan: plan,
         trial_ends_at: obj.trial_end
           ? new Date(obj.trial_end * 1000).toISOString()
           : null,
@@ -149,8 +156,11 @@ app.get('/api/config', (_req, res) => {
 // ── /api/stripe/checkout ──────────────────────────────────────────────────────
 app.post('/api/stripe/checkout', async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
-  const { userId, authToken, email } = req.body;
+  const { userId, authToken, email, plan } = req.body; // plan: 'pro' (default) | 'multi'
   if (!userId || !authToken) return res.status(400).json({ error: 'Missing auth' });
+
+  const priceId = (plan === 'multi' && STRIPE_MULTI_PRICE_ID) ? STRIPE_MULTI_PRICE_ID : STRIPE_PRICE_ID;
+  if (!priceId) return res.status(503).json({ error: 'Stripe price not configured' });
 
   try {
     const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
@@ -165,12 +175,15 @@ app.post('/api/stripe/checkout', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       payment_method_types: ['card'],
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       mode: 'subscription',
-      subscription_data: { trial_period_days: 7 },
+      subscription_data: {
+        trial_period_days: 7,
+        metadata: { plan: plan || 'pro' },
+      },
       success_url: `${APP_URL}/?checkout=success`,
       cancel_url: `${APP_URL}/?checkout=cancelled`,
-      metadata: { user_id: userId },
+      metadata: { user_id: userId, plan: plan || 'pro' },
     });
 
     res.json({ url: session.url });

@@ -1179,6 +1179,22 @@ input[type="color"] {
 .pub-ent-feature { font-size: 13px; color: var(--text-2); }
 .pub-ent-feature { color: var(--green); font-weight: 500; }
 
+/* Publication upgrade card ($99/mo plan) */
+.pub-upgrade-card {
+  background: var(--bg-2); border: 1px solid var(--border-md);
+  border-radius: var(--r-lg); padding: 28px; margin-bottom: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.pub-upgrade-header { margin-bottom: 20px; }
+.pub-upgrade-title { font-size: 18px; font-weight: 800; color: var(--text-1); margin-bottom: 6px; }
+.pub-upgrade-price { font-size: 36px; font-weight: 900; color: var(--accent); line-height: 1.1; margin-bottom: 10px; }
+.pub-upgrade-sub { font-size: 13px; color: var(--text-2); line-height: 1.65; }
+.pub-upgrade-features {
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 8px 24px; margin-bottom: 22px;
+}
+.pub-upgrade-feature { font-size: 13px; color: var(--green); font-weight: 500; }
+
 /* Subject line history */
 .subject-history { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
 .subject-history-item {

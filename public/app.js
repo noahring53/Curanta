@@ -53,7 +53,8 @@ const state = {
   draggedStory: null,
   hasAI: false,
   hasStripe: false,
-  subscriptionStatus: 'inactive', // 'inactive' | 'trialing' | 'active'
+  subscriptionStatus: 'inactive', // 'inactive' | 'trialing' | 'active' | 'past_due'
+  subscriptionPlan: 'pro',        // 'pro' ($49) | 'multi' ($99, 3 pubs)
   grandfathered: false,
   generationsThisMonth: 0,
   trialEndsAt: null,
@@ -251,6 +252,7 @@ function handleClick(e) {
     case 'close-modal':     closeModal(); break;
     case 'auth-tab':        switchAuthTab(d.tab); break;
     case 'logout':          handleLogout(); break;
+    case 'subscribe-multi': subscribeMulti(); break;
     case 'toggle-feed':     toggleFeed(d.feedId); break;
     case 'remove-feed':     removeFeed(d.feedId); break;
     case 'remove-article':  removeArticle(d.feedId, d.articleId); break;
@@ -1185,10 +1187,12 @@ function renderSubscriptionPage() {
 function renderPublicationsPage() {
   const email = state.user?.email || '';
 
-  if (state.grandfathered) {
-    // ── Real multi-publication UI ────────────────────────────────────────────
+  if (canUsePubs()) {
+    // ── Real multi-publication UI (grandfathered = unlimited, multi plan = cap 3) ─
+    const limit = pubLimit();
+    const totalPubs = 1 + state.publications.length; // Default + extras
+    const atLimit = totalPubs >= limit;
     const allPubs = [
-      // "Default" publication always first — represents user_settings
       { id: null, name: 'Default', isDefault: true },
       ...state.publications,
     ];
@@ -1199,21 +1203,20 @@ function renderPublicationsPage() {
     ${renderTrialBanner()}
     <div class="app-topbar">
       <div class="page-title">Publications</div>
-      <button class="btn btn-primary" data-action="new-publication">+ New Publication</button>
+      ${!isFinite(limit) ? '' : `<div style="font-size:12px;color:var(--text-3)">${totalPubs} / ${limit} publications used</div>`}
     </div>
     <div class="settings-page" style="max-width:720px">
       <p style="font-size:13px;color:var(--text-2);margin-bottom:20px;line-height:1.6">
         Each publication has its own brand voice, audience avatar, tone, and prompt defaults.
-        Switch between them below — Settings will apply to whichever is active.
+        The active one is used for every newsletter you build — switch here, then configure in Settings.
       </p>
       <div class="pub-list">
         ${allPubs.map(pub => {
           const isActive = pub.id === state.currentPublicationId;
-          const initial = pub.name[0].toUpperCase();
           return `
         <div class="pub-card ${isActive ? 'pub-card-active' : ''}">
           <div class="pub-card-left">
-            <div class="pub-avatar" style="${pub.isDefault ? 'background:var(--bg-5);color:var(--text-2)' : ''}">${initial}</div>
+            <div class="pub-avatar" style="${pub.isDefault ? 'background:var(--bg-5);color:var(--text-2)' : ''}">${pub.name[0].toUpperCase()}</div>
             <div>
               <div class="pub-name">${escHtml(pub.name)}${pub.isDefault ? ' <span style="font-size:11px;color:var(--text-3);font-weight:400">(default)</span>' : ''}</div>
               <div class="pub-meta">${isActive ? '<span class="badge badge-accent" style="font-size:10px">Active</span>' : 'Click to switch'}</div>
@@ -1225,27 +1228,40 @@ function renderPublicationsPage() {
               : `<button class="btn btn-outline btn-sm" data-action="switch-publication" data-id="${pub.id || ''}">Switch</button>`
             }
             ${!pub.isDefault ? `
-            <button class="btn-icon" title="Rename" data-action="rename-publication" data-id="${pub.id}" style="font-size:13px">✎</button>
-            <button class="btn-icon" title="Delete" data-action="delete-publication" data-id="${pub.id}" style="font-size:13px;color:var(--text-3)">🗑</button>` : ''}
+            <button class="btn-icon" title="Rename" data-action="rename-publication" data-id="${pub.id}" style="font-size:14px">✎</button>
+            <button class="btn-icon" title="Delete" data-action="delete-publication" data-id="${pub.id}" style="font-size:14px;color:var(--text-3)">🗑</button>` : ''}
           </div>
         </div>`;
         }).join('')}
-      </div>
 
-      <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--r-md);padding:18px 20px;margin-top:8px">
-        <div style="font-size:13px;font-weight:600;margin-bottom:6px">How it works</div>
-        <div style="font-size:13px;color:var(--text-2);line-height:1.7">
-          The <strong>active</strong> publication's brand voice, audience avatar, and prompt defaults are used for every newsletter you build.
-          Switch publications here, then configure its settings on the <a href="#" data-action="navigate" data-view="settings" style="color:var(--accent)">Settings page</a>.
-          Newsletters and sources are currently shared across publications.
-        </div>
+        ${atLimit
+          ? `<div class="pub-card" style="opacity:0.5;cursor:default">
+              <div class="pub-card-left">
+                <div class="pub-avatar pub-avatar-add">+</div>
+                <div>
+                  <div class="pub-name" style="color:var(--text-2)">Publication limit reached</div>
+                  <div class="pub-meta">${isFinite(limit) ? `Your plan includes ${limit} publications` : ''}</div>
+                </div>
+              </div>
+             </div>`
+          : `<div class="pub-card pub-card-add" data-action="new-publication">
+              <div class="pub-card-left">
+                <div class="pub-avatar pub-avatar-add">+</div>
+                <div>
+                  <div class="pub-name" style="color:var(--text-2)">Add a publication</div>
+                  <div class="pub-meta">Separate voice, avatar &amp; prompts per brand</div>
+                </div>
+              </div>
+             </div>`
+        }
       </div>
     </div>
   </div>
 </div>`;
   }
 
-  // ── Enterprise upgrade wall (non-grandfathered) ──────────────────────────
+  // ── Upgrade wall — show $99/mo multi-pub offer ───────────────────────────
+  const email2 = state.user?.email || '';
   const pubName = state.brandVoice
     ? (state.brandVoice.match(/newsletter called ["']?([^"'\n,]+)/i)?.[1] || 'My Publication')
     : 'My Publication';
@@ -1257,48 +1273,63 @@ function renderPublicationsPage() {
     <div class="app-topbar">
       <div class="page-title">Publications</div>
     </div>
-    <div class="settings-page" style="max-width:720px">
+    <div class="settings-page" style="max-width:680px">
+
       <div class="pub-list">
+        <!-- Current publication -->
         <div class="pub-card pub-card-active">
           <div class="pub-card-left">
-            <div class="pub-avatar">${(email[0] || 'P').toUpperCase()}</div>
+            <div class="pub-avatar">${(email2[0] || 'P').toUpperCase()}</div>
             <div>
               <div class="pub-name">${escHtml(pubName)}</div>
-              <div class="pub-meta">${escHtml(email)} &nbsp;·&nbsp; <span class="badge badge-accent" style="font-size:10px">Current</span></div>
+              <div class="pub-meta"><span class="badge badge-accent" style="font-size:10px">Active</span></div>
             </div>
           </div>
           <button class="btn btn-outline btn-sm" data-action="navigate" data-view="settings">Edit settings →</button>
         </div>
-        <div class="pub-card pub-card-add" data-action="show-pub-upgrade">
+
+        <!-- Add publication — $99 upgrade card -->
+        <div class="pub-card pub-card-add" data-action="subscribe-multi" style="cursor:pointer">
           <div class="pub-card-left">
             <div class="pub-avatar pub-avatar-add">+</div>
             <div>
               <div class="pub-name" style="color:var(--text-2)">Add a publication</div>
-              <div class="pub-meta">Separate voice, sources, and settings per brand</div>
+              <div class="pub-meta">Upgrade to Multi-Publication — $99/mo</div>
             </div>
           </div>
-          <span class="badge badge-accent" style="font-size:11px;padding:4px 10px">Enterprise</span>
+          <span class="badge badge-accent" style="font-size:11px;padding:4px 10px">Upgrade</span>
         </div>
       </div>
-      <div class="pub-enterprise-card">
-        <div class="pub-ent-icon">🏢</div>
-        <div>
-          <div class="pub-ent-title">Running multiple brands?</div>
-          <div class="pub-ent-sub">Curanta Enterprise gives each publication its own brand voice, audience avatar, RSS sources, design settings, and newsletter history — all under one login. Agencies and media companies use this to manage 5–20+ brands from a single dashboard.</div>
-          <div class="pub-ent-features">
-            <div class="pub-ent-feature">✓ Unlimited publications</div>
-            <div class="pub-ent-feature">✓ Per-brand voice &amp; avatar</div>
-            <div class="pub-ent-feature">✓ Isolated source libraries</div>
-            <div class="pub-ent-feature">✓ Custom generation limits</div>
-            <div class="pub-ent-feature">✓ White-label interface</div>
-            <div class="pub-ent-feature">✓ Dedicated support &amp; SLA</div>
-          </div>
-          <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
-            <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" class="btn btn-primary">Book a demo →</a>
-            <button class="btn btn-outline" onclick="navigator.clipboard.writeText('hello@curanta.app').then(()=>toast('Email copied','success'))">Copy email</button>
+
+      <!-- $99 plan callout -->
+      <div class="pub-upgrade-card">
+        <div class="pub-upgrade-header">
+          <div>
+            <div class="pub-upgrade-title">Multi-Publication Plan</div>
+            <div class="pub-upgrade-price">$99<span style="font-size:15px;font-weight:500;color:var(--text-2)">/mo</span></div>
+            <div class="pub-upgrade-sub">Run up to 3 separate publications from one account. Each gets its own brand voice, audience avatar, and AI defaults.</div>
           </div>
         </div>
+        <div class="pub-upgrade-features">
+          <div class="pub-upgrade-feature">✓ 3 publications</div>
+          <div class="pub-upgrade-feature">✓ Per-brand voice &amp; audience avatar</div>
+          <div class="pub-upgrade-feature">✓ Separate prompt defaults per brand</div>
+          <div class="pub-upgrade-feature">✓ 500 AI generations / month (shared)</div>
+          <div class="pub-upgrade-feature">✓ Everything in Pro</div>
+          <div class="pub-upgrade-feature">✓ 7-day free trial</div>
+        </div>
+        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:4px" data-action="subscribe-multi">
+          Start free trial →
+        </button>
+        <div style="font-size:11px;color:var(--text-3);text-align:center;margin-top:8px">No charge for 7 days. Cancel anytime.</div>
       </div>
+
+      <!-- Enterprise note -->
+      <div style="text-align:center;margin-top:24px;font-size:12px;color:var(--text-3)">
+        Need more than 3 publications or custom limits?
+        <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" style="color:var(--accent);margin-left:4px">Talk to us about Enterprise →</a>
+      </div>
+
     </div>
   </div>
 </div>`;
@@ -3373,7 +3404,8 @@ async function loadUserSettings() {
   if (data.brand_color)              state.design.primaryColor  = data.brand_color;
   if (data.default_prompts)          state.defaultPrompts       = { ...state.defaultPrompts, ...data.default_prompts };
   if (data.subscription_status)           state.subscriptionStatus   = data.subscription_status;
-  if (data.grandfathered)                 state.grandfathered        = data.grandfathered;
+  if (data.subscription_plan)            state.subscriptionPlan     = data.subscription_plan;
+  if (data.grandfathered)                state.grandfathered        = data.grandfathered;
   if (data.generations_this_month != null) state.generationsThisMonth = data.generations_this_month;
   if (data.trial_ends_at)                 state.trialEndsAt          = data.trial_ends_at;
 
@@ -3404,6 +3436,34 @@ function applyCurrentPublication() {
 function currentPublicationName() {
   if (!state.currentPublicationId) return 'Default';
   return state.publications.find(p => p.id === state.currentPublicationId)?.name || 'Default';
+}
+
+// How many publications this account can have (Default + extras)
+function pubLimit() {
+  if (state.grandfathered) return Infinity;
+  if (state.subscriptionPlan === 'multi' && isSubscribed()) return 3;
+  return 1; // pro or free — default only
+}
+
+// Can the user see the real multi-pub UI?
+function canUsePubs() {
+  return state.grandfathered || (state.subscriptionPlan === 'multi' && isSubscribed());
+}
+
+async function subscribeMulti() {
+  if (!state.user) { toast('Sign in first', 'warn'); return; }
+  toast('Opening checkout…', 'info');
+  try {
+    const authToken = await getAuthToken();
+    const res = await fetch('/api/stripe/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.user.id, authToken, email: state.user.email, plan: 'multi' }),
+    });
+    const data = await res.json();
+    if (data.url) window.location.href = data.url;
+    else throw new Error(data.error || 'Checkout failed');
+  } catch (e) { toast('Checkout error: ' + e.message, 'error'); }
 }
 
 // ── Publication management ────────────────────────────────────────────────────
