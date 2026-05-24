@@ -70,6 +70,8 @@ const state = {
   dbNewsletters: [],        // loaded from Supabase for the dashboard
 };
 
+let _pendingCheckoutPlan = null; // set when guest clicks "Start free trial" so we redirect to Stripe after auth
+
 const mockNewsletters = [
   { id: 'n1', title: 'Weekly Tech Digest #47', status: 'sent', sentAt: new Date(Date.now()-2*864e5).toISOString(), openRate: 24.3, clickRate: 4.1, subscribers: 8420, subject: "Apple's AI gamble, the chip race heats up, and why your inbox is about to change" },
   { id: 'n2', title: 'AI Industry Brief — Week 23', status: 'scheduled', scheduledFor: new Date(Date.now()+864e5).toISOString(), openRate: null, subject: "OpenAI's new model, Anthropic raises again, and the regulation question" },
@@ -127,7 +129,14 @@ async function init() {
         if (event === 'SIGNED_IN') {
           state.user = session.user;
           await loadUserSettings();
-          navigate('dashboard');
+          if (_pendingCheckoutPlan) {
+            const plan = _pendingCheckoutPlan;
+            _pendingCheckoutPlan = null;
+            closeModal();
+            await startCheckoutForUser(session.user, plan);
+          } else {
+            navigate('dashboard');
+          }
         } else if (event === 'SIGNED_OUT') {
           state.user = null;
           navigate('landing');
@@ -252,7 +261,8 @@ function handleClick(e) {
     case 'close-modal':     closeModal(); break;
     case 'auth-tab':        switchAuthTab(d.tab); break;
     case 'logout':          handleLogout(); break;
-    case 'subscribe-multi': subscribeMulti(); break;
+    case 'subscribe-multi': startCheckout('multi'); break;
+    case 'start-trial':     startCheckout('pro');   break;
     case 'save-section-layout': {
       const raw = document.getElementById('sections-setup-input')?.value || '';
       const sections = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0)
@@ -393,7 +403,7 @@ function renderLanding() {
     </div>
     <div class="nav-actions">
       <button class="btn btn-ghost" data-action="show-auth" data-tab="login">Log in</button>
-      <button class="btn btn-primary" data-action="show-auth" data-tab="signup">Start free →</button>
+      <button class="btn btn-primary" data-action="start-trial">Start free →</button>
     </div>
   </nav>
 
@@ -402,7 +412,7 @@ function renderLanding() {
     <h1 class="animate-in animate-in-d1">Create publish-ready newsletters<br>in <span>minutes</span>, not hours.</h1>
     <p class="hero-sub animate-in animate-in-d2">Feed any RSS feed or article URL. AI writes it in your voice. You hit publish.</p>
     <div class="hero-actions animate-in animate-in-d3">
-      <button class="btn btn-primary" data-action="show-auth" data-tab="signup">Start free trial →</button>
+      <button class="btn btn-primary" data-action="start-trial">Start free trial →</button>
       <button class="btn btn-outline" onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})">See how it works</button>
     </div>
     <p class="hero-note animate-in animate-in-d4">7-day free trial · No credit card required to see the builder</p>
@@ -628,7 +638,7 @@ function renderLanding() {
           <div class="pricing-feature dim">Audience avatar</div>
           <div class="pricing-feature dim">Unlimited sources</div>
         </div>
-        <button class="btn btn-outline" style="width:100%;margin-top:auto" data-action="show-auth" data-tab="signup">Get started free</button>
+        <button class="btn btn-outline" style="width:100%;margin-top:auto" data-action="start-trial">Get started free</button>
       </div>
 
       <!-- Pro -->
@@ -648,7 +658,7 @@ function renderLanding() {
           <div class="pricing-feature">Section defaults — never start from a blank prompt</div>
           <div class="pricing-feature">HTML export — paste straight into Beehiiv or Substack</div>
         </div>
-        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" data-action="show-auth" data-tab="signup">Start free trial →</button>
+        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" data-action="start-trial">Start free trial →</button>
         <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">No charge for 7 days. Cancel anytime.</div>
       </div>
 
@@ -709,7 +719,7 @@ function renderLanding() {
     <h2>Ready to publish faster?</h2>
     <p>Join 10,000+ newsletter creators who ship in minutes, not hours.</p>
     <div class="hero-actions">
-      <button class="btn btn-primary" data-action="show-auth" data-tab="signup">Start free — no card required →</button>
+      <button class="btn btn-primary" data-action="start-trial">Start free — no card required →</button>
       <button class="btn btn-outline">Book a demo</button>
     </div>
   </section>
@@ -1025,7 +1035,8 @@ async function submitLogin(e) {
     const { error } = await sb.auth.signInWithPassword({ email, password });
     if (error) throw error;
     closeModal();
-    toast('Signed in', 'success');
+    if (!_pendingCheckoutPlan) toast('Signed in', 'success');
+    // onAuthStateChange handles navigation / checkout redirect
   } catch(err) {
     showAuthError('login-error', friendlyAuthError(err.message));
     setAuthBtn('login-submit', false, 'Sign in →');
@@ -1044,10 +1055,11 @@ async function submitSignup(e) {
     const { data, error } = await sb.auth.signUp({ email, password });
     if (error) throw error;
     if (data?.user && !data?.session) {
+      // Email confirmation required — onAuthStateChange will handle checkout after confirm
       showCheckEmailScreen(email);
     } else {
+      // Session available immediately — onAuthStateChange fires and handles checkout/dashboard
       closeModal();
-      toast('Account created! Welcome to Curanta.', 'success');
     }
   } catch(err) {
     showAuthError('signup-error', friendlyAuthError(err.message));
@@ -1328,7 +1340,7 @@ function renderSubscriptionPage() {
             <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Subject lines, rewrites & CTAs</div>
             <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> 500 AI generations per month</div>
           </div>
-          <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="subscribe()">Start 7-day free trial →</button>
+          <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="startCheckout('pro')">Start 7-day free trial →</button>
         </div>
       </div>
       `}
@@ -3399,7 +3411,7 @@ function showSubscribeModal() {
       <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> Subject lines, rewrites, CTAs</div>
       <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-2)"><span style="color:var(--green)">✓</span> 500 generations / month</div>
     </div>
-    <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:12px" onclick="closeModal();subscribe()">Start free trial →</button>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:12px" onclick="closeModal();startCheckout('pro')">Start free trial →</button>
     <button class="btn btn-ghost btn-sm" style="margin-top:10px;width:100%;justify-content:center" onclick="closeModal()">Maybe later</button>
   </div>
 </div>`;
@@ -3638,7 +3650,8 @@ function canUsePubs() {
   return state.grandfathered || (state.subscriptionPlan === 'multi' && isSubscribed());
 }
 
-async function subscribeMulti() {
+async function _legacySubscribeMultiUnused() {
+  // replaced by startCheckout('multi') — kept to avoid accidental deletion of closing braces
   if (!state.user) { toast('Sign in first', 'warn'); return; }
   toast('Opening checkout…', 'info');
   try {
@@ -3774,22 +3787,38 @@ async function getAuthToken() {
   } catch { return ''; }
 }
 
-async function subscribe() {
-  if (!state.user) { toast('Sign in first', 'warn'); return; }
+// ── Checkout ──────────────────────────────────────────────────────────────────
+// Call this from anywhere — handles both signed-in (goes straight to Stripe)
+// and guest (stores intent, shows auth modal, then redirects after sign-in/up).
+async function startCheckout(plan = 'pro') {
+  if (!state.hasStripe) { navigate('subscription'); return; }
+  if (!state.user) {
+    _pendingCheckoutPlan = plan;
+    showAuthModal('signup');
+    return;
+  }
+  await startCheckoutForUser(state.user, plan);
+}
+
+async function startCheckoutForUser(user, plan = 'pro') {
   toast('Opening checkout…', 'info');
   try {
     const authToken = await getAuthToken();
     const res = await fetch('/api/stripe/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: state.user.id, authToken, email: state.user.email }),
+      body: JSON.stringify({ userId: user.id, authToken, email: user.email, plan }),
     });
     const data = await res.json();
     if (data.url) window.location.href = data.url;
     else throw new Error(data.error || 'Checkout failed');
   } catch (e) { toast('Checkout error: ' + e.message, 'error'); }
 }
-window.subscribe = subscribe;
+
+async function subscribe()      { await startCheckout('pro'); }
+async function subscribeMulti() { await startCheckout('multi'); }
+window.subscribe      = subscribe;
+window.startCheckout  = startCheckout;
 
 async function manageBilling() {
   if (!state.user) return;
