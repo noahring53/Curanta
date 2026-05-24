@@ -134,9 +134,12 @@ async function init() {
           _justSignedUp = false;
           const plan = _pendingCheckoutPlan || (isNew ? 'pro' : null);
           _pendingCheckoutPlan = null;
-          if (plan) {
+          if (plan && isNew) {
+            showAccountCreatedScreen(session.user.email);
+            await startCheckoutForUser(session.user, plan);
+          } else if (plan) {
             closeModal();
-            toast(isNew ? 'Account created! Taking you to checkout…' : 'Signed in! Taking you to checkout…', 'success');
+            toast('Signed in! Taking you to checkout…', 'success');
             await startCheckoutForUser(session.user, plan);
           } else {
             navigate('dashboard');
@@ -175,11 +178,11 @@ async function init() {
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('checkout') === 'success') {
     history.replaceState(null, '', window.location.pathname);
-    setTimeout(() => {
-      toast('🎉 Trial started — 7 days free, cancel anytime from Subscription.', 'success');
-      // Refresh subscription status
-      if (sb && state.user) loadUserSettings().then(() => render());
-    }, 500);
+    setTimeout(async () => {
+      if (sb && state.user) await loadUserSettings();
+      render(); // now on dashboard, logged in
+      showWelcomeModal();
+    }, 800);
   } else if (urlParams.get('checkout') === 'cancelled') {
     history.replaceState(null, '', window.location.pathname);
     toast('Checkout cancelled — you can subscribe anytime from Settings.', 'info');
@@ -990,6 +993,61 @@ function checkPwStrength(input) {
     <span style="font-size:11px;color:${colors[score]};margin-left:6px;min-width:38px">${labels[score]}</span>
   </div>`;
 }
+function showWelcomeModal() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  const planName = state.subscriptionPlan === 'multi' ? 'Curanta Studio' : 'Curanta Pro';
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" style="max-width:480px;text-align:center;padding:44px 40px 36px">
+      <div style="font-size:52px;margin-bottom:18px;line-height:1">🎉</div>
+      <div style="font-size:23px;font-weight:800;letter-spacing:-0.03em;margin-bottom:10px">Welcome to Curanta!</div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.75;margin-bottom:32px">
+        Your <strong style="color:var(--text-1)">${planName}</strong> trial has started.<br>
+        You have <strong style="color:var(--green)">7 days free</strong> — no charge until it ends.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;text-align:left;margin-bottom:32px;background:var(--bg-3);border-radius:var(--r-md);padding:20px">
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">1</div>
+          <div style="font-size:13px"><strong>Set up your brand voice</strong><br><span style="color:var(--text-2)">Settings → paste your newsletter URL → click Analyze</span></div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">2</div>
+          <div style="font-size:13px"><strong>Add your RSS sources</strong><br><span style="color:var(--text-2)">Sources → paste any RSS feed or newsletter URL</span></div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">3</div>
+          <div style="font-size:13px"><strong>Build your first issue</strong><br><span style="color:var(--text-2)">Dashboard → New newsletter → drag articles in → generate</span></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:13px" onclick="closeModal()">Start building →</button>
+    </div>
+  </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+}
+
+function showAccountCreatedScreen(email) {
+  const modal = document.getElementById('modal-root');
+  if (!modal) { toast('Account created! Taking you to checkout…', 'success'); return; }
+  modal.innerHTML = `
+  <div class="modal-overlay">
+    <div class="modal auth-modal" style="text-align:center;padding:44px 36px 36px">
+      <div class="account-created-check">✓</div>
+      <div style="font-size:22px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Account created!</div>
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:6px">${escHtml(email)}</div>
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:20px">Taking you to Stripe to start your free trial…</div>
+      <div style="height:3px;background:var(--bg-4);border-radius:99px;overflow:hidden;margin-bottom:8px">
+        <div id="checkout-progress-bar" style="height:100%;width:0%;background:var(--accent);border-radius:99px;transition:width 2s linear"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-3)">You'll be redirected automatically</div>
+    </div>
+  </div>`;
+  setTimeout(() => {
+    const bar = document.getElementById('checkout-progress-bar');
+    if (bar) bar.style.width = '85%';
+  }, 60);
+}
+
 function showCheckEmailScreen(email) {
   // Replace the entire modal — never depends on existing DOM state, always visible
   const modal = document.getElementById('modal-root');

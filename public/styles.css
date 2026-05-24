@@ -299,6 +299,18 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
   transition: color 0.12s;
 }
 .auth-link-btn:hover { color: var(--accent); }
+/* Account created success screen */
+.account-created-check {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: var(--green-soft); border: 2px solid var(--green);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px; font-size: 28px; color: var(--green); font-weight: 700;
+  animation: check-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+@keyframes check-pop {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    LANDING PAGE
