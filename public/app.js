@@ -613,8 +613,8 @@ function renderLanding() {
 
   <section class="pricing-section" id="pricing">
     <div class="section-eyebrow">Pricing</div>
-    <h2 class="section-title">One subscription.<br>Every issue, effortless.</h2>
-    <p class="section-sub" style="margin:0 auto 16px">7-day free trial. Cancel before it ends and pay nothing.</p>
+    <h2 class="section-title">Simple plans.<br>Serious output.</h2>
+    <p class="section-sub" style="margin:0 auto 16px">7-day free trial on every plan. Cancel before it ends and pay nothing.</p>
     <div class="pricing-value-bar">
       The average newsletter editor spends <strong>6+ hours per issue</strong>. Curanta gets you to publish in under one.
       At $49/mo, that's <strong>less than $3 per hour saved</strong> — and your issues will be better.
@@ -622,43 +622,47 @@ function renderLanding() {
 
     <div class="pricing-grid">
 
-      <!-- Starter -->
+      <!-- Pro -->
       <div class="pricing-card">
         <div>
-          <div class="pricing-tier">Starter</div>
-          <div class="pricing-price"><span class="amount">$0</span><span class="period">/mo</span></div>
-          <div class="pricing-desc">For writers who want to try the builder before committing.</div>
-        </div>
-        <div class="pricing-features">
-          <div class="pricing-feature">3 newsletters per month</div>
-          <div class="pricing-feature">20 AI generations</div>
-          <div class="pricing-feature">1 RSS source</div>
-          <div class="pricing-feature">HTML export</div>
-          <div class="pricing-feature dim">Brand voice system</div>
-          <div class="pricing-feature dim">Audience avatar</div>
-          <div class="pricing-feature dim">Unlimited sources</div>
-        </div>
-        <button class="btn btn-outline" style="width:100%;margin-top:auto" data-action="start-trial">Get started free</button>
-      </div>
-
-      <!-- Pro -->
-      <div class="pricing-card featured">
-        <div>
-          <div class="pricing-tier">Pro</div>
+          <div class="pricing-tier">Curanta Pro</div>
           <div class="pricing-price"><span class="amount">$49</span><span class="period">/mo</span></div>
           <div class="pricing-trial-badge">✦ 7-day free trial included</div>
-          <div class="pricing-desc">For publishers who ship on a schedule and can't afford a slow week.</div>
+          <div class="pricing-desc">For creators who ship on a schedule and can't afford a slow week.</div>
         </div>
         <div class="pricing-features">
-          <div class="pricing-feature"><strong>500 AI generations/month</strong> — enough for a daily newsletter</div>
+          <div class="pricing-feature"><strong>500 AI generations/month</strong></div>
+          <div class="pricing-feature">1 publication</div>
           <div class="pricing-feature">Unlimited newsletters & drafts</div>
           <div class="pricing-feature">Unlimited RSS sources</div>
-          <div class="pricing-feature">Brand voice — AI writes like you, not a chatbot</div>
-          <div class="pricing-feature">Audience avatar — AI writes for your reader</div>
-          <div class="pricing-feature">Section defaults — never start from a blank prompt</div>
-          <div class="pricing-feature">HTML export — paste straight into Beehiiv or Substack</div>
+          <div class="pricing-feature">Brand voice & audience avatar</div>
+          <div class="pricing-feature">Section prompt defaults</div>
+          <div class="pricing-feature">HTML export for any platform</div>
         </div>
-        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" data-action="start-trial">Start free trial →</button>
+        <button class="btn btn-outline" style="width:100%;margin-top:auto;font-size:14px;padding:11px" data-action="start-trial">Start free trial →</button>
+        <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">No charge for 7 days. Cancel anytime.</div>
+      </div>
+
+      <!-- Studio (featured) -->
+      <div class="pricing-card featured">
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+            <div class="pricing-tier">Curanta Studio</div>
+            <div style="font-size:10px;font-weight:700;background:var(--accent);color:#fff;padding:2px 8px;border-radius:99px;letter-spacing:0.05em">BEST VALUE</div>
+          </div>
+          <div class="pricing-price"><span class="amount">$99</span><span class="period">/mo</span></div>
+          <div class="pricing-trial-badge">✦ 7-day free trial included</div>
+          <div class="pricing-desc">For operators running multiple brands from one account.</div>
+        </div>
+        <div class="pricing-features">
+          <div class="pricing-feature"><strong>500 AI generations/month</strong> (shared)</div>
+          <div class="pricing-feature"><strong>Up to 3 publications</strong></div>
+          <div class="pricing-feature">Everything in Pro</div>
+          <div class="pricing-feature">Per-brand voice & audience avatar</div>
+          <div class="pricing-feature">Separate prompt defaults per brand</div>
+          <div class="pricing-feature">Switch publications instantly</div>
+        </div>
+        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" onclick="startCheckout('multi')">Start free trial →</button>
         <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">No charge for 7 days. Cancel anytime.</div>
       </div>
 
@@ -667,17 +671,17 @@ function renderLanding() {
         <div>
           <div class="pricing-tier">Enterprise</div>
           <div class="pricing-price"><span class="amount" style="font-size:32px;letter-spacing:-0.02em">Custom</span></div>
-          <div class="pricing-desc">For agencies, media companies, and political operations running multiple brands.</div>
+          <div class="pricing-desc">For agencies, media companies, and political operations running many brands.</div>
         </div>
         <div class="pricing-features">
-          <div class="pricing-feature">Everything in Pro</div>
+          <div class="pricing-feature">Everything in Studio</div>
+          <div class="pricing-feature">Unlimited publications</div>
           <div class="pricing-feature">Custom generation limits</div>
           <div class="pricing-feature">White-label interface</div>
-          <div class="pricing-feature">Multi-brand management</div>
           <div class="pricing-feature">API access</div>
           <div class="pricing-feature">Dedicated support + SLA</div>
         </div>
-        <button class="btn btn-outline" style="width:100%;margin-top:auto">Book a demo</button>
+        <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" class="btn btn-outline" style="width:100%;margin-top:auto;text-align:center;display:block;padding:10px">Contact us →</a>
         <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">We'll respond within one business day.</div>
       </div>
 
@@ -690,6 +694,10 @@ function renderLanding() {
         <div class="faq-item">
           <div class="faq-q">Do I need a credit card for the trial?</div>
           <div class="faq-a">Yes — Stripe requires a card to start. You won't be charged until the 7 days are up. Cancel before then and pay absolutely nothing.</div>
+        </div>
+        <div class="faq-item">
+          <div class="faq-q">What's the difference between Pro and Studio?</div>
+          <div class="faq-a">Pro gives you one publication — one brand voice, one audience avatar, one set of defaults. Studio lets you run up to 3 completely separate publications from the same account, each with its own brand identity and AI settings. If you run more than one newsletter, Studio is worth it.</div>
         </div>
         <div class="faq-item">
           <div class="faq-q">What counts as a generation?</div>
@@ -1054,6 +1062,12 @@ async function submitSignup(e) {
   try {
     const { data, error } = await sb.auth.signUp({ email, password });
     if (error) throw error;
+    // Supabase anti-enumeration: existing emails return fake success with empty identities
+    if (data?.user?.identities?.length === 0) {
+      showAuthError('signup-error', 'An account with this email already exists. Try signing in instead.');
+      setAuthBtn('signup-submit', false, 'Start free trial →');
+      return;
+    }
     if (data?.user && !data?.session) {
       // Email confirmation required — onAuthStateChange will handle checkout after confirm
       showCheckEmailScreen(email);
@@ -1300,18 +1314,23 @@ function renderSubscriptionPage() {
     </div>
     <div class="page-body" style="max-width:560px">
 
-      ${isSubscribed() ? `
+      ${isSubscribed() ? (() => {
+        const planLabel = state.grandfathered ? 'Grandfathered — Full Access'
+          : state.subscriptionStatus === 'trialing'
+            ? `${state.subscriptionPlan === 'multi' ? 'Curanta Studio' : 'Curanta Pro'} — Free Trial · ${trialDaysLeft()} day${trialDaysLeft() === 1 ? '' : 's'} left`
+            : `${state.subscriptionPlan === 'multi' ? 'Curanta Studio' : 'Curanta Pro'} — Active`;
+        const planSub = state.grandfathered ? 'Your account has permanent full access.'
+          : state.subscriptionStatus === 'trialing' ? 'Your card will be charged when the trial ends. Cancel anytime before then.'
+          : state.subscriptionPlan === 'multi' ? 'Up to 3 publications · 500 AI generations/month.'
+          : '1 publication · 500 AI generations/month.';
+        return `
       <div class="settings-section">
         <div style="padding:24px;background:var(--green-soft);border:1px solid var(--green);border-radius:var(--r-lg)">
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:${state.grandfathered ? '0' : '20px'}">
             <div style="font-size:28px">✦</div>
             <div>
-              <div style="font-size:16px;font-weight:700;color:var(--green)">
-                ${state.grandfathered ? 'Grandfathered — Full Access' : state.subscriptionStatus === 'trialing' ? `Free Trial — ${trialDaysLeft()} day${trialDaysLeft() === 1 ? '' : 's'} left` : 'Curanta Pro — Active'}
-              </div>
-              <div style="font-size:12px;color:var(--text-2);margin-top:2px">
-                ${state.grandfathered ? 'Your account has permanent full access.' : state.subscriptionStatus === 'trialing' ? 'Your card will be charged when the trial ends. Cancel anytime before then.' : 'Your subscription is active.'}
-              </div>
+              <div style="font-size:16px;font-weight:700;color:var(--green)">${planLabel}</div>
+              <div style="font-size:12px;color:var(--text-2);margin-top:2px">${planSub}</div>
             </div>
           </div>
           ${!state.grandfathered ? `
@@ -1322,25 +1341,52 @@ function renderSubscriptionPage() {
           <div style="background:var(--bg-3);border-radius:6px;height:8px;overflow:hidden;margin-bottom:20px">
             <div style="background:var(--green);height:100%;width:${pct}%;transition:width 0.3s;border-radius:6px"></div>
           </div>
-          <button class="btn btn-outline" onclick="manageBilling()">${state.subscriptionStatus === 'trialing' ? 'Cancel trial →' : 'Manage billing →'}</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-outline" onclick="manageBilling()">${state.subscriptionStatus === 'trialing' ? 'Cancel trial →' : 'Manage billing →'}</button>
+            ${state.subscriptionPlan !== 'multi' ? `<button class="btn btn-ghost btn-sm" onclick="startCheckout('multi')" style="color:var(--accent)">Upgrade to Studio →</button>` : ''}
+          </div>
           ` : ''}
         </div>
-      </div>
-      ` : `
+      </div>`;
+      })() : `
       <div class="settings-section">
-        <div style="padding:32px;border:1px dashed var(--border-md);border-radius:var(--r-lg);text-align:center">
-          <div style="font-size:36px;margin-bottom:12px">✦</div>
-          <div style="font-size:18px;font-weight:700;margin-bottom:8px">Get Curanta Pro</div>
-          <div style="font-size:13px;color:var(--text-2);line-height:1.7;margin-bottom:24px;max-width:360px;margin-left:auto;margin-right:auto">
-            Everything you need to produce a polished newsletter, fast.
+        <div style="margin-bottom:20px">
+          <div style="font-size:16px;font-weight:700;margin-bottom:4px">Choose a plan</div>
+          <div style="font-size:13px;color:var(--text-2)">7-day free trial on both plans. No charge until the trial ends.</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <!-- Pro -->
+          <div style="padding:22px;border:1px solid var(--border-md);border-radius:var(--r-lg)">
+            <div style="font-size:13px;font-weight:700;color:var(--text-2);margin-bottom:4px">Curanta Pro</div>
+            <div style="font-size:28px;font-weight:900;letter-spacing:-0.03em;margin-bottom:2px">$49<span style="font-size:14px;font-weight:500;color:var(--text-2)">/mo</span></div>
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:16px">1 publication</div>
+            <div style="display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--text-2);margin-bottom:20px">
+              <div>✓ 500 AI generations/mo</div>
+              <div>✓ Brand voice & avatar</div>
+              <div>✓ Section defaults</div>
+              <div>✓ HTML export</div>
+            </div>
+            <button class="btn btn-outline" style="width:100%;justify-content:center" onclick="startCheckout('pro')">Start free trial →</button>
           </div>
-          <div style="display:flex;flex-direction:column;gap:10px;text-align:left;max-width:300px;margin:0 auto 28px">
-            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Lead stories, quick hits & briefings</div>
-            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Brand voice generation & matching</div>
-            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> Subject lines, rewrites & CTAs</div>
-            <div style="display:flex;align-items:center;gap:10px;font-size:13px"><span style="color:var(--green);font-size:15px">✓</span> 500 AI generations per month</div>
+          <!-- Studio -->
+          <div style="padding:22px;border:2px solid var(--accent);border-radius:var(--r-lg);background:var(--accent-soft);position:relative">
+            <div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:2px 10px;border-radius:99px;letter-spacing:0.05em;white-space:nowrap">BEST VALUE</div>
+            <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">Curanta Studio</div>
+            <div style="font-size:28px;font-weight:900;letter-spacing:-0.03em;margin-bottom:2px">$99<span style="font-size:14px;font-weight:500;color:var(--text-2)">/mo</span></div>
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:16px">Up to 3 publications</div>
+            <div style="display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--text-2);margin-bottom:20px">
+              <div>✓ Everything in Pro</div>
+              <div>✓ 3 separate publications</div>
+              <div>✓ Per-brand voice & avatar</div>
+              <div>✓ Separate prompt defaults</div>
+            </div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="startCheckout('multi')">Start free trial →</button>
           </div>
-          <button class="btn btn-primary" style="font-size:15px;padding:12px 32px" onclick="startCheckout('pro')">Start 7-day free trial →</button>
+        </div>
+        <div style="text-align:center;font-size:11px;color:var(--text-3)">Cancel before the trial ends and pay nothing. No calls, no forms.</div>
+        <div style="margin-top:16px;padding:14px 18px;background:var(--bg-3);border-radius:var(--r-md);font-size:12px;color:var(--text-2);text-align:center">
+          Need more than 3 publications?
+          <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" style="color:var(--accent);margin-left:4px">Talk to us about Enterprise →</a>
         </div>
       </div>
       `}
