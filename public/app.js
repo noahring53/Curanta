@@ -995,18 +995,7 @@ function checkPwStrength(input) {
   </div>`;
 }
 function showAccountCreatedThenPicker(user) {
-  // Show "Account created!" for 1.2s then slide into plan picker
-  const modal = document.getElementById('modal-root');
-  if (!modal) { showPlanPickerModal(user); return; }
-  modal.innerHTML = `
-  <div class="modal-overlay">
-    <div class="modal auth-modal" style="text-align:center;padding:48px 36px 44px">
-      <div class="account-created-check">✓</div>
-      <div style="font-size:22px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Account created!</div>
-      <div style="font-size:13px;color:var(--text-2)">${escHtml(user.email)}</div>
-    </div>
-  </div>`;
-  setTimeout(() => showPlanPickerModal(user), 1200);
+  showPlanPickerModal(user);
 }
 
 function showPlanPickerModal(user) {
@@ -1017,7 +1006,9 @@ function showPlanPickerModal(user) {
   <div class="modal-overlay" id="modal-overlay">
     <div class="modal" style="max-width:580px;padding:36px 36px 28px">
       <div style="text-align:center;margin-bottom:28px">
-        <div style="font-size:13px;font-weight:700;color:var(--accent);letter-spacing:0.04em;margin-bottom:8px">✦ CURANTA</div>
+        <div style="display:inline-flex;align-items:center;gap:7px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;padding:5px 14px;font-size:12px;font-weight:600;color:var(--green);margin-bottom:14px">
+          <span>✓</span> Account created
+        </div>
         <div style="font-size:23px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Choose your plan</div>
         <div style="font-size:13px;color:var(--text-2)">7-day free trial on both. No charge until it ends.</div>
       </div>
@@ -1237,10 +1228,9 @@ async function submitSignup(e) {
     if (data?.user && !data?.session) {
       // Email confirmation required — show inbox screen; onAuthStateChange handles checkout after confirm
       showCheckEmailScreen(email);
-    } else {
-      // Session available immediately — onAuthStateChange fires and handles toast + checkout/dashboard
-      closeModal();
     }
+    // If session is immediate, do NOT closeModal() — onAuthStateChange will replace the modal
+    // content with the account created screen + plan picker. Closing here races against that.
   } catch(err) {
     showAuthError('signup-error', friendlyAuthError(err.message));
     setAuthBtn('signup-submit', false, 'Start free trial →');
