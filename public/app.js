@@ -70,15 +70,22 @@ const state = {
   dbNewsletters: [],        // loaded from Supabase for the dashboard
 };
 
-let _pendingCheckoutPlan = null; // set when guest clicks "Start free trial" so we redirect to Stripe after auth
+// Pending checkout plan — survives page reloads via sessionStorage (needed when Supabase
+// email confirmation causes a page reload before onAuthStateChange fires).
+let _pendingCheckoutPlan = sessionStorage.getItem('_pendingPlan') || null;
 let _justSignedUp = false;       // true for one auth cycle after a new account is created
 
-const mockNewsletters = [
-  { id: 'n1', title: 'Weekly Tech Digest #47', status: 'sent', sentAt: new Date(Date.now()-2*864e5).toISOString(), openRate: 24.3, clickRate: 4.1, subscribers: 8420, subject: "Apple's AI gamble, the chip race heats up, and why your inbox is about to change" },
-  { id: 'n2', title: 'AI Industry Brief — Week 23', status: 'scheduled', scheduledFor: new Date(Date.now()+864e5).toISOString(), openRate: null, subject: "OpenAI's new model, Anthropic raises again, and the regulation question" },
-  { id: 'n3', title: 'The Policy Pulse: May Edition', status: 'draft', updatedAt: new Date(Date.now()-3600e3).toISOString(), subject: '' },
-  { id: 'n4', title: 'Morning Briefing — May 12', status: 'sent', sentAt: new Date(Date.now()-7*864e5).toISOString(), openRate: 31.2, clickRate: 6.8, subscribers: 8312, subject: '3 things you need to know this morning' },
-];
+function setPendingPlan(plan) {
+  _pendingCheckoutPlan = plan;
+  if (plan) sessionStorage.setItem('_pendingPlan', plan);
+  else sessionStorage.removeItem('_pendingPlan');
+}
+function consumePendingPlan() {
+  const p = _pendingCheckoutPlan;
+  _pendingCheckoutPlan = null;
+  sessionStorage.removeItem('_pendingPlan');
+  return p;
+}
 
 // ── CONFIG & AUTH ─────────────────────────────────────────────────────────────
 let cfg = { supabaseUrl: '', supabaseAnonKey: '', hasAI: false };
@@ -132,10 +139,13 @@ async function init() {
           await loadUserSettings();
           const isNew = _justSignedUp;
           _justSignedUp = false;
-          const specificPlan = _pendingCheckoutPlan; // only set if user clicked a specific plan CTA
-          _pendingCheckoutPlan = null;
-          if (isNew) {
-            // New account: show confirmation then let them choose a plan
+          const specificPlan = consumePendingPlan(); // reads + clears both variable and sessionStorage
+          if (isNew && specificPlan) {
+            // New account + plan already chosen upfront — skip picker, go straight to Stripe
+            showAccountCreatedScreen(session.user.email);
+            await startCheckoutForUser(session.user, specificPlan);
+          } else if (isNew) {
+            // New account with no plan chosen — show plan picker
             showAccountCreatedThenPicker(session.user);
           } else if (specificPlan) {
             // Returning user clicked a specific plan CTA — go straight there
@@ -257,6 +267,7 @@ function handleClick(e) {
 
   switch (action) {
     case 'navigate':        navigate(d.view); break;
+    case 'book-demo':       window.open('https://calendly.com/noahrin/60-minute-tutoring-clone', '_blank'); break;
     case 'show-pub-upgrade': document.querySelector('.pub-enterprise-card')?.scrollIntoView({behavior:'smooth',block:'center'}); document.querySelector('.pub-enterprise-card')?.classList.add('pub-enterprise-card-highlight'); setTimeout(()=>document.querySelector('.pub-enterprise-card')?.classList.remove('pub-enterprise-card-highlight'),1800); break;
     case 'new-publication':    showNewPublicationModal(); break;
     case 'switch-publication': switchPublication(d.id || null); break;
@@ -270,8 +281,10 @@ function handleClick(e) {
     case 'close-modal':     closeModal(); break;
     case 'auth-tab':        switchAuthTab(d.tab); break;
     case 'logout':          handleLogout(); break;
+    case 'manage-billing':  manageBilling(); break;
     case 'subscribe-multi': startCheckout('multi'); break;
-    case 'start-trial':     startCheckout('pro');   break;
+    case 'start-trial':     scrollToPricing(); break;
+    case 'pick-plan':       pickPlan(d.plan);       break;
     case 'save-section-layout': {
       const raw = document.getElementById('sections-setup-input')?.value || '';
       const sections = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0)
@@ -395,15 +408,48 @@ function handleKeydown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'p' && state.view === 'builder') { e.preventDefault(); showPreview(); }
 }
 
+// ── LOGO SVG (inline, adapts to light/dark via CSS vars) ─────────────────────
+function logoSVG(size = 32) {
+  const starScale = size / 44;
+  // Four-pointed star path, originally fitted to 44×44
+  const star = `M22 2 L26.2 17.8 L42 22 L26.2 26.2 L22 42 L17.8 26.2 L2 22 L17.8 17.8 Z`;
+  const textSize = size * 0.65;
+  const gap = size + 10;
+  const baseline = size * 0.72;
+  return `<svg viewBox="0 0 ${gap + textSize * 4.4} ${size}" height="${size}" style="display:block;overflow:visible" aria-label="Curanta">
+    <g transform="scale(${starScale})">
+      <path d="${star}" fill="var(--accent)"/>
+    </g>
+    <text x="${gap}" y="${baseline}"
+      font-family="'Inter',system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+      font-size="${textSize}" font-weight="800" letter-spacing="-0.04em"
+      fill="var(--text-1)">Curanta</text>
+  </svg>`;
+}
+
+function logoSVGWhite(size = 32) {
+  const starScale = size / 44;
+  const star = `M22 2 L26.2 17.8 L42 22 L26.2 26.2 L22 42 L17.8 26.2 L2 22 L17.8 17.8 Z`;
+  const textSize = size * 0.65;
+  const gap = size + 10;
+  const baseline = size * 0.72;
+  return `<svg viewBox="0 0 ${gap + textSize * 4.4} ${size}" height="${size}" style="display:block;overflow:visible" aria-label="Curanta">
+    <g transform="scale(${starScale})">
+      <path d="${star}" fill="rgba(255,255,255,0.9)"/>
+    </g>
+    <text x="${gap}" y="${baseline}"
+      font-family="'Inter',system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+      font-size="${textSize}" font-weight="800" letter-spacing="-0.04em"
+      fill="#ffffff">Curanta</text>
+  </svg>`;
+}
+
 // ── LANDING PAGE ──────────────────────────────────────────────────────────────
 function renderLanding() {
   return `
 <div class="landing-page">
   <nav class="landing-nav">
-    <div class="nav-logo">
-      <div class="nav-logo-icon">L</div>
-      Curanta
-    </div>
+    <a class="nav-logo" href="#" data-action="navigate" data-view="landing" style="text-decoration:none">${logoSVG(28)}</a>
     <div class="nav-links">
       <a class="nav-link" href="#features">Features</a>
       <a class="nav-link" href="#how">How it works</a>
@@ -411,8 +457,9 @@ function renderLanding() {
       <a class="nav-link" href="#integrations">Integrations</a>
     </div>
     <div class="nav-actions">
+      <button class="btn btn-ghost" onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank');event.stopPropagation()">Book a demo</button>
       <button class="btn btn-ghost" data-action="show-auth" data-tab="login">Log in</button>
-      <button class="btn btn-primary" data-action="start-trial">Start free →</button>
+      <button class="btn btn-primary" data-action="start-trial">See plans & start free →</button>
     </div>
   </nav>
 
@@ -421,10 +468,10 @@ function renderLanding() {
     <h1 class="animate-in animate-in-d1">Create publish-ready newsletters<br>in <span>minutes</span>, not hours.</h1>
     <p class="hero-sub animate-in animate-in-d2">Feed any RSS feed or article URL. AI writes it in your voice. You hit publish.</p>
     <div class="hero-actions animate-in animate-in-d3">
-      <button class="btn btn-primary" data-action="start-trial">Start free trial →</button>
+      <button class="btn btn-primary" data-action="start-trial">Choose your plan →</button>
       <button class="btn btn-outline" onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})">See how it works</button>
     </div>
-    <p class="hero-note animate-in animate-in-d4">7-day free trial · No credit card required to see the builder</p>
+    <p class="hero-note animate-in animate-in-d4">7-day free trial · Card required to start · No charge until day 8 · Cancel anytime</p>
 
     <div class="hero-visual-wrap">
       <div class="demo-browser">
@@ -496,10 +543,10 @@ function renderLanding() {
   </section>
 
   <div class="social-strip">
-    <div class="social-item"><strong>10,000+</strong> newsletters created</div>
-    <div class="social-item"><strong>500+</strong> publishers & media brands</div>
     <div class="social-item"><strong>15 min</strong> avg. time to publish</div>
-    <div class="social-item"><strong>28%</strong> avg. open rate</div>
+    <div class="social-item"><strong>500</strong> AI generations per month</div>
+    <div class="social-item"><strong>7-day</strong> free trial, no charge until day 8</div>
+    <div class="social-item"><strong>3</strong> publications on Studio plan</div>
   </div>
 
   <section class="features-section" id="features">
@@ -541,42 +588,13 @@ function renderLanding() {
   </section>
 
   <section class="testimonials-section">
-    <div class="section-eyebrow">Loved by publishers</div>
-    <h2 class="section-title">Don't take our word for it</h2>
-    <div class="testimonials-grid">
-      <div class="testimonial-card animate-in">
-        <div class="testimonial-stars">★★★★★</div>
-        <div class="testimonial-quote">I publish a daily B2B tech newsletter for 12,000 readers. Before Curanta, each issue took me 4–5 hours. Now I'm done in under an hour — and my open rates are actually up. The brand voice system is eerily good.</div>
-        <div class="testimonial-author">
-          <div class="testimonial-avatar">M</div>
-          <div>
-            <div class="testimonial-name">Marcus Webb</div>
-            <div class="testimonial-role">Editor, SaaS Insider · 12,400 subscribers</div>
-          </div>
-        </div>
-      </div>
-      <div class="testimonial-card animate-in animate-in-d2">
-        <div class="testimonial-stars">★★★★★</div>
-        <div class="testimonial-quote">I was skeptical that AI could capture my voice. After pasting in three of my past issues, it nailed the tone on the first draft. My readers had no idea. I use Curanta for every issue now.</div>
-        <div class="testimonial-author">
-          <div class="testimonial-avatar">J</div>
-          <div>
-            <div class="testimonial-name">Jamie Ortiz</div>
-            <div class="testimonial-role">Creator, The Policy Brief · 6,800 subscribers</div>
-          </div>
-        </div>
-      </div>
-      <div class="testimonial-card animate-in animate-in-d4">
-        <div class="testimonial-stars">★★★★★</div>
-        <div class="testimonial-quote">We run newsletters for three political clients. Curanta handles all three in the time it used to take for one. The drag-and-drop builder and multi-source RSS support are exactly what we needed.</div>
-        <div class="testimonial-author">
-          <div class="testimonial-avatar">R</div>
-          <div>
-            <div class="testimonial-name">Rachel Kim</div>
-            <div class="testimonial-role">Comms Director, Meridian Strategy Group</div>
-          </div>
-        </div>
-      </div>
+    <div class="section-eyebrow">Early access</div>
+    <h2 class="section-title">Built for newsletter professionals</h2>
+    <div style="max-width:680px;margin:0 auto;text-align:center;color:var(--text-2);font-size:16px;line-height:1.7;padding:0 20px">
+      Curanta is in early access. We're working directly with newsletter creators, media brands, and political communications teams to shape the product.
+      <br><br>
+      If you publish a newsletter and want to cut production time in half,
+      <button class="btn btn-outline" style="margin-left:8px;vertical-align:middle" onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank');event.stopPropagation()">Book a 30-min call →</button>
     </div>
   </section>
 
@@ -622,7 +640,7 @@ function renderLanding() {
 
   <section class="pricing-section" id="pricing">
     <div class="section-eyebrow">Pricing</div>
-    <h2 class="section-title">Simple plans.<br>Serious output.</h2>
+    <h2 class="section-title">Choose your plan.<br>Start free today.</h2>
     <p class="section-sub" style="margin:0 auto 16px">7-day free trial on every plan. Cancel before it ends and pay nothing.</p>
     <div class="pricing-value-bar">
       The average newsletter editor spends <strong>6+ hours per issue</strong>. Curanta gets you to publish in under one.
@@ -648,7 +666,7 @@ function renderLanding() {
           <div class="pricing-feature">Section prompt defaults</div>
           <div class="pricing-feature">HTML export for any platform</div>
         </div>
-        <button class="btn btn-outline" style="width:100%;margin-top:auto;font-size:14px;padding:11px" data-action="start-trial">Start free trial →</button>
+        <button class="btn btn-outline" style="width:100%;margin-top:auto;font-size:14px;padding:11px" data-action="pick-plan" data-plan="pro">Start free trial →</button>
         <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">No charge for 7 days. Cancel anytime.</div>
       </div>
 
@@ -671,7 +689,7 @@ function renderLanding() {
           <div class="pricing-feature">Separate prompt defaults per brand</div>
           <div class="pricing-feature">Switch publications instantly</div>
         </div>
-        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" onclick="startCheckout('multi')">Start free trial →</button>
+        <button class="btn btn-primary" style="width:100%;font-size:15px;padding:13px;margin-top:auto" data-action="pick-plan" data-plan="multi">Start free trial →</button>
         <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">No charge for 7 days. Cancel anytime.</div>
       </div>
 
@@ -690,7 +708,7 @@ function renderLanding() {
           <div class="pricing-feature">API access</div>
           <div class="pricing-feature">Dedicated support + SLA</div>
         </div>
-        <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" class="btn btn-outline" style="width:100%;margin-top:auto;text-align:center;display:block;padding:10px">Contact us →</a>
+        <button class="btn btn-outline" style="width:100%;margin-top:auto;padding:10px" onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank');event.stopPropagation()">Book a demo →</button>
         <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:8px">We'll respond within one business day.</div>
       </div>
 
@@ -734,25 +752,21 @@ function renderLanding() {
 
   <section class="cta-section">
     <h2>Ready to publish faster?</h2>
-    <p>Join 10,000+ newsletter creators who ship in minutes, not hours.</p>
+    <p>Stop spending hours on newsletters. Curanta gets you from brief to publish-ready in minutes.</p>
     <div class="hero-actions">
-      <button class="btn btn-primary" data-action="start-trial">Start free — no card required →</button>
-      <button class="btn btn-outline">Book a demo</button>
+      <button class="btn btn-primary" data-action="start-trial">See plans & start free →</button>
+      <button class="btn btn-outline" onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank');event.stopPropagation()">Book a demo</button>
     </div>
   </section>
 
   <footer class="landing-footer">
-    <div class="nav-logo">
-      <div class="nav-logo-icon">L</div>
-      Curanta
-    </div>
+    <a class="nav-logo" href="#" data-action="navigate" data-view="landing" style="text-decoration:none">${logoSVG(28)}</a>
     <div class="footer-links">
-      <a href="#">Privacy</a>
-      <a href="#">Terms</a>
-      <a href="#">Status</a>
-      <a href="#">Docs</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="#" onclick="event.preventDefault();showContactPopup()">Contact</a>
     </div>
-    <div style="color:var(--text-3);font-size:12px">© 2025 Curanta. All rights reserved.</div>
+    <div style="color:var(--text-3);font-size:12px">© 2026 Curanta. All rights reserved.</div>
   </footer>
 </div>`;
 }
@@ -762,80 +776,112 @@ function showAuthModal(tab = 'signup') {
   const modal = document.getElementById('modal-root');
   if (!modal) return;
   const configured = !!(cfg.supabaseUrl && cfg.supabaseAnonKey);
+  const plan = _pendingCheckoutPlan;
+  const planName  = plan === 'multi' ? 'Curanta Studio' : 'Curanta Pro';
+  const planPrice = plan === 'multi' ? '$99' : '$49';
+  const planFeatures = plan === 'multi'
+    ? ['Up to 3 publications', 'Everything in Pro', 'Per-brand voice & avatar', 'Separate prompt defaults', 'Switch publications instantly']
+    : ['500 AI generations/month', '1 publication', 'Brand voice & audience avatar', 'Section prompt defaults', 'HTML export for any platform'];
+
+  // Signup gets a full-screen split layout; login stays as a compact modal
+  if (tab === 'signup') {
+    modal.innerHTML = `
+  <div class="auth-fullscreen" id="modal-overlay">
+    <button class="auth-fs-close" data-action="close-modal" aria-label="Close">×</button>
+
+    <!-- Left panel: plan / value prop -->
+    <div class="auth-fs-left">
+      <div class="auth-fs-logo">${logoSVGWhite(26)}</div>
+      <div class="auth-fs-plan-badge">${plan ? `${planName} · ${planPrice}/mo` : '7-day free trial'}</div>
+      <div class="auth-fs-headline">Ship great newsletters,<br>faster than ever.</div>
+      <div class="auth-fs-sub">7 days free. No card charged until the trial ends. Cancel anytime.</div>
+      <ul class="auth-fs-features">
+        ${(plan ? planFeatures : ['500 AI generations/month','Brand voice & audience avatar','Section prompt defaults','HTML export for any platform','Unlimited newsletters & drafts']).map(f => `<li>✓ ${f}</li>`).join('')}
+      </ul>
+      <div class="auth-fs-trust">Join newsletter creators already using Curanta</div>
+    </div>
+
+    <!-- Right panel: form -->
+    <div class="auth-fs-right">
+      <div class="auth-fs-form-wrap">
+        <div class="auth-fs-form-title">Create your account</div>
+        <div class="auth-fs-form-sub">Already have one? <button class="auth-fs-switch" data-action="show-auth" data-tab="login">Sign in →</button></div>
+
+        ${!configured ? `
+        <div class="auth-error" style="margin:20px 0">⚠️ Supabase is not configured.</div>
+        ` : `
+        <form id="signup-form" class="auth-fs-form" novalidate>
+          <div class="auth-inline-error" id="signup-error" hidden></div>
+          <div class="auth-fs-field">
+            <label class="auth-fs-label" for="signup-email">Email address</label>
+            <input id="signup-email" type="email" class="input auth-fs-input" placeholder="you@example.com" autocomplete="email">
+          </div>
+          <div class="auth-fs-field">
+            <label class="auth-fs-label" for="signup-password">Password</label>
+            <div class="pw-field-wrap">
+              <input id="signup-password" type="password" class="input auth-fs-input" placeholder="Min. 8 characters" autocomplete="new-password" oninput="checkPwStrength(this)">
+              <button type="button" class="pw-toggle" onclick="togglePw('signup-password',this)">Show</button>
+            </div>
+            <div id="pw-strength"></div>
+          </div>
+          <button type="submit" id="signup-submit" class="btn btn-primary auth-fs-submit">
+            Start ${plan ? planName : 'free'} trial →
+          </button>
+          <p class="auth-fs-legal">By creating an account you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.</p>
+        </form>
+        <div class="auth-divider">or</div>
+        <button class="btn btn-outline auth-fs-magic" onclick="sendMagicLink('signup')">✉️ Email me a magic link</button>
+        `}
+      </div>
+    </div>
+  </div>`;
+    modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+    setTimeout(() => document.getElementById('signup-email')?.focus(), 80);
+    document.getElementById('signup-form')?.addEventListener('submit', submitSignup);
+    return;
+  }
+
+  // ── Login stays as a compact centred modal ──
   modal.innerHTML = `
   <div class="modal-overlay" id="modal-overlay">
     <div class="modal auth-modal">
       <button class="auth-close-btn btn-icon" data-action="close-modal" aria-label="Close">×</button>
 
-      <div class="auth-brand">
-        <span class="auth-brand-mark">✦</span>
-        <span class="auth-brand-name">Curanta</span>
-      </div>
+      <div class="auth-brand">${logoSVG(24)}</div>
 
       <div id="auth-headline" class="auth-headline">
-        ${tab === 'signup'
-          ? '<div class="auth-headline-title">Start your free trial</div><div class="auth-headline-sub">No credit card required · 7-day free trial</div>'
-          : '<div class="auth-headline-title">Welcome back</div><div class="auth-headline-sub">Sign in to your account</div>'}
+        <div class="auth-headline-title">Welcome back</div>
+        <div class="auth-headline-sub">Sign in to your account</div>
       </div>
 
       ${!configured ? `
       <div class="auth-body">
-        <div class="auth-error" style="margin-bottom:14px">⚠️ Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to your environment.</div>
+        <div class="auth-error" style="margin-bottom:14px">⚠️ Supabase is not configured.</div>
         <button class="btn btn-outline" style="width:100%;justify-content:center" onclick="state.user={email:'demo@example.com',id:'demo'};closeModal();navigate('dashboard')">Continue as demo user →</button>
       </div>
       ` : `
-      <div class="auth-tabs">
-        <button class="auth-tab ${tab === 'login' ? 'active' : ''}" data-action="auth-tab" data-tab="login">Sign in</button>
-        <button class="auth-tab ${tab === 'signup' ? 'active' : ''}" data-action="auth-tab" data-tab="signup">Create account</button>
-      </div>
-
       <div class="auth-body">
-
-        <!-- ── Login panel ── -->
-        <div id="auth-panel-login" ${tab !== 'login' ? 'hidden' : ''}>
-          <form id="login-form" class="auth-form" novalidate>
-            <div class="auth-inline-error" id="login-error" hidden></div>
-            <div class="form-group">
-              <label class="form-label" for="login-email">Email</label>
-              <input id="login-email" type="email" class="input" placeholder="you@example.com" autocomplete="email">
+        <form id="login-form" class="auth-form" novalidate>
+          <div class="auth-inline-error" id="login-error" hidden></div>
+          <div class="form-group">
+            <label class="form-label" for="login-email">Email</label>
+            <input id="login-email" type="email" class="input" placeholder="you@example.com" autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="login-password">Password</label>
+            <div class="pw-field-wrap">
+              <input id="login-password" type="password" class="input" placeholder="••••••••" autocomplete="current-password">
+              <button type="button" class="pw-toggle" onclick="togglePw('login-password',this)">Show</button>
             </div>
-            <div class="form-group">
-              <label class="form-label" for="login-password">Password</label>
-              <div class="pw-field-wrap">
-                <input id="login-password" type="password" class="input" placeholder="••••••••" autocomplete="current-password">
-                <button type="button" class="pw-toggle" onclick="togglePw('login-password',this)">Show</button>
-              </div>
-            </div>
-            <button type="submit" id="login-submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px">Sign in →</button>
-          </form>
-          <button class="auth-link-btn" data-action="forgot-password">Forgot password?</button>
-          <div class="auth-divider">or</div>
-          <button class="btn btn-outline" id="magic-login-btn" style="width:100%;justify-content:center" onclick="sendMagicLink('login')">✉️ Email me a magic link</button>
+          </div>
+          <button type="submit" id="login-submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px">Sign in →</button>
+        </form>
+        <button class="auth-link-btn" data-action="forgot-password">Forgot password?</button>
+        <div class="auth-divider">or</div>
+        <button class="btn btn-outline" id="magic-login-btn" style="width:100%;justify-content:center" onclick="sendMagicLink('login')">✉️ Email me a magic link</button>
+        <div style="text-align:center;margin-top:16px;font-size:13px;color:var(--text-3)">
+          No account? <button class="auth-fs-switch" data-action="show-auth" data-tab="signup">Start free trial →</button>
         </div>
-
-        <!-- ── Signup panel ── -->
-        <div id="auth-panel-signup" ${tab !== 'signup' ? 'hidden' : ''}>
-          <form id="signup-form" class="auth-form" novalidate>
-            <div class="auth-inline-error" id="signup-error" hidden></div>
-            <div class="form-group">
-              <label class="form-label" for="signup-email">Email</label>
-              <input id="signup-email" type="email" class="input" placeholder="you@example.com" autocomplete="email">
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="signup-password">Password</label>
-              <div class="pw-field-wrap">
-                <input id="signup-password" type="password" class="input" placeholder="Min. 8 characters" autocomplete="new-password" oninput="checkPwStrength(this)">
-                <button type="button" class="pw-toggle" onclick="togglePw('signup-password',this)">Show</button>
-              </div>
-              <div id="pw-strength"></div>
-            </div>
-            <button type="submit" id="signup-submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px">Start free trial →</button>
-            <p class="auth-note">By creating an account you agree to our <a href="/terms" style="color:var(--accent)">Terms</a> and <a href="/privacy" style="color:var(--accent)">Privacy Policy</a>.</p>
-          </form>
-          <div class="auth-divider">or</div>
-          <button class="btn btn-outline" id="magic-signup-btn" style="width:100%;justify-content:center" onclick="sendMagicLink('signup')">✉️ Continue with magic link</button>
-        </div>
-
       </div>`}
     </div>
   </div>`;
@@ -849,18 +895,14 @@ function closeModal() {
 }
 
 function switchAuthTab(tab) {
-  document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-  document.getElementById('auth-panel-login')?.toggleAttribute('hidden', tab !== 'login');
-  document.getElementById('auth-panel-signup')?.toggleAttribute('hidden', tab !== 'signup');
-  const hl = document.getElementById('auth-headline');
-  if (hl) hl.innerHTML = tab === 'signup'
-    ? '<div class="auth-headline-title">Start your free trial</div><div class="auth-headline-sub">No credit card required · 7-day free trial</div>'
-    : '<div class="auth-headline-title">Welcome back</div><div class="auth-headline-sub">Sign in to your account</div>';
-  setTimeout(() => document.getElementById(tab === 'login' ? 'login-email' : 'signup-email')?.focus(), 50);
+  // Signup is now a full-screen page; login is a compact modal.
+  // Switching between them just re-renders the appropriate layout.
+  showAuthModal(tab);
 }
 
 function showForgotPasswordForm() {
-  const panel = document.getElementById('auth-panel-login');
+  // The login modal uses .auth-body; replace its contents with the reset form
+  const panel = document.querySelector('#modal-root .auth-body') || document.getElementById('auth-panel-login');
   if (!panel) return;
   panel.innerHTML = `
     <div style="margin-bottom:16px">
@@ -874,7 +916,7 @@ function showForgotPasswordForm() {
         <input id="reset-email" type="email" class="input" placeholder="you@example.com" required autocomplete="email">
       </div>
       <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Send reset link →</button>
-      <button type="button" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:6px;font-size:12px" data-action="auth-tab" data-tab="login">← Back to sign in</button>
+      <button type="button" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:6px;font-size:12px" data-action="show-auth" data-tab="login">← Back to sign in</button>
     </form>`;
   document.getElementById('reset-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -994,6 +1036,67 @@ function checkPwStrength(input) {
     <span style="font-size:11px;color:${colors[score]};margin-left:6px;min-width:38px">${labels[score]}</span>
   </div>`;
 }
+function scrollToPricing() {
+  if (state.view !== 'landing') {
+    navigate('landing');
+    // After render, scroll to pricing
+    setTimeout(() => {
+      document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  } else {
+    document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function showInitialPlanPicker() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" style="max-width:580px;padding:36px 36px 28px;position:relative">
+      <button class="btn btn-ghost btn-sm" data-action="close-modal" style="position:absolute;top:14px;right:14px;font-size:20px;line-height:1;padding:2px 9px;color:var(--text-3)">×</button>
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="font-size:23px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Start your free trial</div>
+        <div style="font-size:13px;color:var(--text-2)">7 days free on both plans · No charge until day 8 · Cancel anytime</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+        <!-- Pro -->
+        <div style="padding:24px;border:1px solid var(--border-md);border-radius:var(--r-lg);display:flex;flex-direction:column">
+          <div style="font-size:12px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Curanta Pro</div>
+          <div style="font-size:32px;font-weight:900;letter-spacing:-0.03em;line-height:1;margin-bottom:4px">$49<span style="font-size:14px;font-weight:500;color:var(--text-3)">/mo</span></div>
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:18px">1 publication</div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--text-2);flex:1;margin-bottom:20px">
+            <div>✓ 500 AI generations / month</div>
+            <div>✓ Brand voice &amp; audience avatar</div>
+            <div>✓ Section prompt defaults</div>
+            <div>✓ HTML export to any platform</div>
+            <div>✓ Unlimited newsletters &amp; drafts</div>
+          </div>
+          <button class="btn btn-outline" style="width:100%;justify-content:center;padding:11px" data-action="pick-plan" data-plan="pro">Start Pro trial →</button>
+        </div>
+        <!-- Studio -->
+        <div style="padding:24px;border:2px solid var(--accent);border-radius:var(--r-lg);background:var(--accent-soft);display:flex;flex-direction:column;position:relative">
+          <div style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:3px 12px;border-radius:99px;white-space:nowrap;letter-spacing:0.06em">BEST VALUE</div>
+          <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Curanta Studio</div>
+          <div style="font-size:32px;font-weight:900;letter-spacing:-0.03em;line-height:1;margin-bottom:4px">$99<span style="font-size:14px;font-weight:500;color:var(--text-3)">/mo</span></div>
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:18px">Up to 3 publications</div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--text-2);flex:1;margin-bottom:20px">
+            <div><strong style="color:var(--text-1)">✓ Up to 3 publications</strong></div>
+            <div>✓ Everything in Pro</div>
+            <div>✓ Per-brand voice &amp; avatar</div>
+            <div>✓ Separate prompt defaults per brand</div>
+            <div>✓ Switch publications instantly</div>
+          </div>
+          <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" data-action="pick-plan" data-plan="multi">Start Studio trial →</button>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:11px;color:var(--text-3)">Not sure which? Start with Pro — you can always upgrade to Studio from your account.</div>
+    </div>
+  </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+}
+window.showInitialPlanPicker = showInitialPlanPicker;
+
 function showAccountCreatedThenPicker(user) {
   showPlanPickerModal(user);
 }
@@ -1027,7 +1130,7 @@ function showPlanPickerModal(user) {
             <div>✓ HTML export to any platform</div>
             <div>✓ Unlimited newsletters & drafts</div>
           </div>
-          <button class="btn btn-outline" style="width:100%;justify-content:center;padding:11px" onclick="pickPlan('pro')">Start Pro trial →</button>
+          <button class="btn btn-outline" style="width:100%;justify-content:center;padding:11px" data-action="pick-plan" data-plan="pro">Start Pro trial →</button>
         </div>
 
         <!-- Studio -->
@@ -1043,7 +1146,7 @@ function showPlanPickerModal(user) {
             <div>✓ Separate prompt defaults per brand</div>
             <div>✓ Switch publications instantly</div>
           </div>
-          <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" onclick="pickPlan('multi')">Start Studio trial →</button>
+          <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" data-action="pick-plan" data-plan="multi">Start Studio trial →</button>
         </div>
 
       </div>
@@ -1056,10 +1159,10 @@ function showPlanPickerModal(user) {
 }
 
 async function pickPlan(plan) {
-  const user = window._planPickerUser || state.user;
-  if (!user) return;
-  showAccountCreatedScreen(user.email); // progress bar while Stripe session loads
-  await startCheckoutForUser(user, plan);
+  // If already logged in, startCheckout will go straight to Stripe.
+  // If not logged in, it sets _pendingCheckoutPlan and shows signup — after auth
+  // the plan is carried through and we skip the post-signup picker.
+  await startCheckout(plan);
 }
 window.pickPlan = pickPlan;
 
@@ -1069,32 +1172,59 @@ function showWelcomeModal() {
   const planName = state.subscriptionPlan === 'multi' ? 'Curanta Studio' : 'Curanta Pro';
   modal.innerHTML = `
   <div class="modal-overlay" id="modal-overlay">
-    <div class="modal" style="max-width:480px;text-align:center;padding:44px 40px 36px">
-      <div style="font-size:52px;margin-bottom:18px;line-height:1">🎉</div>
-      <div style="font-size:23px;font-weight:800;letter-spacing:-0.03em;margin-bottom:10px">Welcome to Curanta!</div>
-      <div style="font-size:13px;color:var(--text-2);line-height:1.75;margin-bottom:32px">
-        Your <strong style="color:var(--text-1)">${planName}</strong> trial has started.<br>
-        You have <strong style="color:var(--green)">7 days free</strong> — no charge until it ends.
-      </div>
-      <div style="display:flex;flex-direction:column;gap:14px;text-align:left;margin-bottom:32px;background:var(--bg-3);border-radius:var(--r-md);padding:20px">
-        <div style="display:flex;gap:12px;align-items:flex-start">
-          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">1</div>
-          <div style="font-size:13px"><strong>Set up your brand voice</strong><br><span style="color:var(--text-2)">Settings → paste your newsletter URL → click Analyze</span></div>
-        </div>
-        <div style="display:flex;gap:12px;align-items:flex-start">
-          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">2</div>
-          <div style="font-size:13px"><strong>Add your RSS sources</strong><br><span style="color:var(--text-2)">Sources → paste any RSS feed or newsletter URL</span></div>
-        </div>
-        <div style="display:flex;gap:12px;align-items:flex-start">
-          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">3</div>
-          <div style="font-size:13px"><strong>Build your first issue</strong><br><span style="color:var(--text-2)">Dashboard → New newsletter → drag articles in → generate</span></div>
+    <div class="modal" style="max-width:520px;padding:44px 40px 36px">
+
+      <!-- Header -->
+      <div style="text-align:center;margin-bottom:32px">
+        <div style="font-size:48px;margin-bottom:16px;line-height:1">🎉</div>
+        <div style="font-size:24px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Welcome to Curanta!</div>
+        <div style="font-size:13px;color:var(--text-2)">
+          Your <strong style="color:var(--text-1)">${planName}</strong> trial has started ·
+          <strong style="color:var(--green)">7 days free</strong>
         </div>
       </div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center;font-size:15px;padding:13px" onclick="closeModal()">Start building →</button>
+
+      <!-- Step 1: Voice setup — do it right here -->
+      <div style="background:var(--accent-soft);border:2px solid var(--accent);border-radius:var(--r-lg);padding:24px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">1</div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--text-1)">Set up your AI writer — takes 30 seconds</div>
+            <div style="font-size:12px;color:var(--text-2)">Paste your newsletter URL. Curanta reads your past issues and builds a voice profile that makes every AI generation sound like you.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input id="welcome-voice-url" class="input" type="url" placeholder="https://yourname.substack.com  or  https://yourpub.beehiiv.com" style="flex:1;font-size:13px">
+          <button class="btn btn-primary" onclick="welcomeStartVoice()" style="white-space:nowrap">Build my AI writer →</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:6px">Works with Substack, Beehiiv, Ghost, WordPress and more</div>
+      </div>
+
+      <!-- Steps 2 & 3 -->
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:28px">
+        <div style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-radius:var(--r-md);background:var(--bg-3)">
+          <div style="width:24px;height:24px;border-radius:50%;background:var(--bg-5);color:var(--text-2);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">2</div>
+          <div style="font-size:13px"><strong>Add your RSS sources</strong> <span style="color:var(--text-3)">→ Sources → paste any feed URL</span></div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-radius:var(--r-md);background:var(--bg-3)">
+          <div style="width:24px;height:24px;border-radius:50%;background:var(--bg-5);color:var(--text-2);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">3</div>
+          <div style="font-size:13px"><strong>Build your first issue</strong> <span style="color:var(--text-3)">→ Dashboard → New newsletter</span></div>
+        </div>
+      </div>
+
+      <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:center;color:var(--text-3)" onclick="closeModal()">Skip for now — I'll set this up in Settings</button>
     </div>
   </div>`;
   modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 }
+
+window.welcomeStartVoice = function() {
+  const input = document.getElementById('welcome-voice-url');
+  const url = input?.value.trim();
+  if (!url) { toast('Paste your newsletter URL first', 'warn'); return; }
+  try { new URL(url); } catch { toast('That doesn\'t look like a valid URL', 'warn'); return; }
+  showVoiceWizard(url);
+};
 
 function showAccountCreatedScreen(email) {
   const modal = document.getElementById('modal-root');
@@ -1130,7 +1260,8 @@ function showCheckEmailScreen(email) {
       <div style="font-size:13px;color:var(--text-2);line-height:1.75;margin-bottom:28px">
         We sent a confirmation link to<br>
         <strong style="color:var(--text-1)">${escHtml(email)}</strong>.<br>
-        Click it to activate your account${_pendingCheckoutPlan ? ' and start your free trial' : ''}.
+        Click it to activate your account and start your
+        ${_pendingCheckoutPlan === 'multi' ? 'Curanta Studio' : 'Curanta Pro'} free trial.
       </div>
       <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">
         Didn't get it? Check your spam folder, or
@@ -1142,6 +1273,21 @@ function showCheckEmailScreen(email) {
   </div>`;
   modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 }
+function showSignupLoadingScreen() {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+  modal.innerHTML = `
+  <div class="modal-overlay" style="display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);backdrop-filter:blur(6px)">
+    <div style="text-align:center;padding:48px 40px;background:var(--bg-2);border-radius:var(--r-xl);border:1px solid var(--border-md);min-width:300px;max-width:360px;animation:fade-in 0.2s ease">
+      <div style="display:flex;justify-content:center;margin-bottom:24px">
+        <div class="signup-spinner"></div>
+      </div>
+      <div style="font-size:20px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Setting up your account</div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.6">Just a moment while we get everything ready…</div>
+    </div>
+  </div>`;
+}
+
 function showMagicLinkSentScreen(email) {
   const modal = document.getElementById('modal-root');
   if (!modal) { toast('Magic link sent — check your inbox!', 'success'); return; }
@@ -1228,9 +1374,11 @@ async function submitSignup(e) {
     if (data?.user && !data?.session) {
       // Email confirmation required — show inbox screen; onAuthStateChange handles checkout after confirm
       showCheckEmailScreen(email);
+    } else if (data?.session) {
+      // Immediate session — show loading screen right away so user isn't staring at the signup form
+      showSignupLoadingScreen();
     }
-    // If session is immediate, do NOT closeModal() — onAuthStateChange will replace the modal
-    // content with the account created screen + plan picker. Closing here races against that.
+    // onAuthStateChange will replace this with the account created screen + plan picker / checkout
   } catch(err) {
     showAuthError('signup-error', friendlyAuthError(err.message));
     setAuthBtn('signup-submit', false, 'Start free trial →');
@@ -1260,6 +1408,20 @@ function renderDashboard() {
       </div>
     </div>
     <div class="dashboard-content">
+
+      ${!state.brandVoice ? `
+      <div style="background:var(--accent-soft);border:1.5px solid var(--accent);border-radius:var(--r-lg);padding:20px 24px;margin-bottom:24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        <div style="font-size:36px;flex-shrink:0">🧠</div>
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:15px;font-weight:700;color:var(--text-1);margin-bottom:3px">Set up your AI writer</div>
+          <div style="font-size:13px;color:var(--text-2)">Paste your newsletter URL — Curanta reads your past issues and builds a voice profile in 30 seconds. Every AI generation will sound like you wrote it.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+          <input id="dash-voice-url" class="input" type="url" placeholder="yourname.substack.com" style="width:220px;font-size:13px">
+          <button class="btn btn-primary" onclick="dashStartVoice()" style="white-space:nowrap">Build AI writer →</button>
+        </div>
+      </div>` : ''}
+
       <div class="stat-grid">
         <div class="stat-card animate-in">
           <div class="stat-label">Newsletters</div>
@@ -1542,7 +1704,7 @@ function renderSubscriptionPage() {
         <div style="text-align:center;font-size:11px;color:var(--text-3)">Cancel before the trial ends and pay nothing. No calls, no forms.</div>
         <div style="margin-top:16px;padding:14px 18px;background:var(--bg-3);border-radius:var(--r-md);font-size:12px;color:var(--text-2);text-align:center">
           Need more than 3 publications?
-          <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" style="color:var(--accent);margin-left:4px">Talk to us about Enterprise →</a>
+          <a href="mailto:noah@getcuranta.com?subject=Enterprise%20inquiry" style="color:var(--accent);margin-left:4px">Talk to us about Enterprise →</a>
         </div>
       </div>
       `}
@@ -1695,7 +1857,7 @@ function renderPublicationsPage() {
       <!-- Enterprise note -->
       <div style="text-align:center;margin-top:24px;font-size:12px;color:var(--text-3)">
         Need more than 3 publications or custom limits?
-        <a href="mailto:hello@curanta.app?subject=Enterprise%20inquiry" style="color:var(--accent);margin-left:4px">Talk to us about Enterprise →</a>
+        <a href="mailto:noah@getcuranta.com?subject=Enterprise%20inquiry" style="color:var(--accent);margin-left:4px">Talk to us about Enterprise →</a>
       </div>
 
     </div>
@@ -1892,10 +2054,7 @@ function renderAppNav(active) {
   return `
 <nav class="app-nav">
   <div class="app-nav-header">
-    <div class="app-nav-logo">
-      <div class="app-nav-logo-icon">L</div>
-      Curanta
-    </div>
+    <div class="app-nav-logo">${logoSVG(26)}</div>
     ${state.grandfathered && state.currentPublicationId ? `
     <div class="nav-pub-chip" data-action="navigate" data-view="publications" title="Switch publication">
       📰 ${escHtml(currentPublicationName())}
@@ -2375,6 +2534,9 @@ async function generateTopStories() {
     toast('Briefing generated', 'success');
   } catch (e) {
     toast('Generation failed: ' + e.message, 'error');
+  } finally {
+    const btn = document.querySelector('[data-action="generate-top-stories"]');
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Generate'; }
   }
   refreshTopStoriesSection();
 }
@@ -2760,42 +2922,125 @@ function cancelStoryEdit(articleId, sectionId) {
   refreshSectionContent(sectionId);
 }
 
+function buildImageGrid(images) {
+  if (!images.length) return '';
+  return `
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">Images from this article — click to select</div>
+      <div id="img-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${images.map(src => `
+          <div class="img-pick-tile" onclick="selectImageTile(this,'${escHtml(src)}')" title="Click to select">
+            <img src="${escHtml(src)}" loading="lazy"
+              onerror="this.closest('.img-pick-tile').style.display='none'"
+              style="width:100%;height:80px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s">
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
 function showImageModal(articleId, sectionId) {
   const modal = document.getElementById('modal-root');
   if (!modal) return;
-  modal.innerHTML = `
-  <div class="modal-overlay" id="img-modal-overlay">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title">Insert Image</div>
-          <div class="modal-sub">Paste an image URL to embed it in this story</div>
+
+  // Find the article (in sections or sources)
+  const article = Object.values(state.newsletter.sections).flat().find(a => a.id === articleId)
+    || state.sources.flatMap(s => s.articles || []).find(a => a.id === articleId);
+  const preloaded = article?.images?.length ? article.images
+    : article?.imageUrl ? [article.imageUrl] : [];
+
+  const renderModal = (images) => {
+    const hasImages = images.length > 0;
+    modal.innerHTML = `
+    <div class="modal-overlay" id="img-modal-overlay">
+      <div class="modal" style="max-width:460px">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title">Insert Image</div>
+            <div class="modal-sub">${hasImages ? 'Pick from article images or paste a URL' : 'Paste an image URL to embed it in this story'}</div>
+          </div>
+          <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
         </div>
-        <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
+        <div class="modal-body" style="padding:20px">
+          ${hasImages ? buildImageGrid(images) : ''}
+          <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:6px">${hasImages ? 'Or paste a custom URL' : 'Image URL'}</div>
+          <input id="img-url-input" class="input" type="url" placeholder="https://example.com/image.jpg" style="width:100%;margin-bottom:12px">
+          <div id="img-preview" style="display:none;margin-bottom:12px;text-align:center">
+            <img id="img-preview-el" src="" style="max-width:100%;max-height:180px;border-radius:6px;border:1px solid var(--border)">
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" style="flex:1" onclick="confirmInsertImage('${articleId}','${sectionId}')">Insert</button>
+            <button class="btn btn-outline" data-action="close-modal">Cancel</button>
+          </div>
+        </div>
       </div>
-      <div class="modal-body" style="padding:20px">
-        <input id="img-url-input" class="input" type="url" placeholder="https://example.com/image.jpg" style="width:100%;margin-bottom:12px">
-        <div id="img-preview" style="display:none;margin-bottom:12px;text-align:center">
-          <img id="img-preview-el" src="" style="max-width:100%;max-height:200px;border-radius:6px;border:1px solid var(--border)">
+    </div>`;
+    modal.querySelector('#img-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+    const input = modal.querySelector('#img-url-input');
+    input.addEventListener('input', () => {
+      const preview = modal.querySelector('#img-preview');
+      const previewEl = modal.querySelector('#img-preview-el');
+      modal.querySelectorAll('.img-pick-tile img').forEach(i => i.style.borderColor = 'transparent');
+      if (input.value.trim()) { previewEl.src = input.value.trim(); preview.style.display = 'block'; }
+      else { preview.style.display = 'none'; }
+    });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') confirmInsertImage(articleId, sectionId); });
+    if (hasImages) {
+      input.value = images[0];
+      setTimeout(() => {
+        const firstTile = modal.querySelector('.img-pick-tile img');
+        if (firstTile) firstTile.style.borderColor = 'var(--accent)';
+      }, 50);
+    } else {
+      input.focus();
+    }
+  };
+
+  if (preloaded.length > 0) {
+    // Already have images — render immediately
+    renderModal(preloaded);
+  } else if (article?.url) {
+    // Fetch images on demand, show loading state first
+    modal.innerHTML = `
+    <div class="modal-overlay" id="img-modal-overlay">
+      <div class="modal" style="max-width:460px">
+        <div class="modal-header">
+          <div><div class="modal-title">Insert Image</div></div>
+          <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-primary" style="flex:1" onclick="confirmInsertImage('${articleId}','${sectionId}')">Insert</button>
-          <button class="btn btn-outline" data-action="close-modal">Cancel</button>
+        <div class="modal-body" style="padding:32px 20px;text-align:center">
+          <div class="signup-spinner" style="margin:0 auto 16px"></div>
+          <div style="font-size:13px;color:var(--text-2)">Pulling images from article…</div>
         </div>
       </div>
-    </div>
-  </div>`;
-  modal.querySelector('#img-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
-  const input = modal.querySelector('#img-url-input');
-  input.focus();
-  input.addEventListener('input', () => {
-    const preview = modal.querySelector('#img-preview');
-    const img = modal.querySelector('#img-preview-el');
-    if (input.value.trim()) { img.src = input.value.trim(); preview.style.display = 'block'; }
-    else { preview.style.display = 'none'; }
-  });
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') confirmInsertImage(articleId, sectionId); });
+    </div>`;
+    modal.querySelector('#img-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+    fetch(`/api/extract-images?url=${encodeURIComponent(article.url)}`)
+      .then(r => r.json())
+      .then(data => {
+        const imgs = data.images || (data.imageUrl ? [data.imageUrl] : []);
+        // Cache on article for next time
+        if (article) { article.images = imgs; article.imageUrl = imgs[0] || null; }
+        renderModal(imgs);
+      })
+      .catch(() => renderModal([]));
+  } else {
+    renderModal([]);
+  }
 }
+
+function selectImageTile(tile, src) {
+  // Highlight selected tile, deselect others
+  document.querySelectorAll('.img-pick-tile img').forEach(i => i.style.borderColor = 'transparent');
+  tile.querySelector('img').style.borderColor = 'var(--accent)';
+  // Put the URL in the input and show preview
+  const input = document.getElementById('img-url-input');
+  const preview = document.getElementById('img-preview');
+  const previewEl = document.getElementById('img-preview-el');
+  if (input) input.value = src;
+  if (previewEl) previewEl.src = src;
+  if (preview) preview.style.display = 'block';
+}
+window.selectImageTile = selectImageTile;
 
 function confirmInsertImage(articleId, sectionId) {
   const input = document.getElementById('img-url-input');
@@ -3044,31 +3289,204 @@ async function discoverVoice() {
   if (!url) { toast('Paste your newsletter URL first', 'warn'); return; }
   try { new URL(url); } catch { toast('That doesn\'t look like a valid URL', 'warn'); return; }
 
-  state.voiceUrlLoading = true;
-  refreshSettingsVoiceSection();
-  toast('Fetching your past issues…', 'info');
-
-  try {
-    const res = await fetch(`/api/discover-voice?url=${encodeURIComponent(url)}`);
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'Discovery failed');
-
-    toast(`Found ${data.count} issues from "${data.source}" — generating voice profile…`, 'info');
-
-    // Track the publication URL
-    if (!state.voiceUrls.includes(url)) state.voiceUrls.push(url);
-    state.brandVoiceSamples = data.text;
-
-    state.voiceUrlLoading = false;
-    await generateBrandVoice();
-    if (input) input.value = '';
-  } catch (e) {
-    toast(`Error: ${e.message}`, 'error');
-    state.voiceUrlLoading = false;
-    refreshSettingsVoiceSection();
-  }
+  showVoiceWizard(url);
 }
 window.discoverVoice = discoverVoice;
+
+function showVoiceWizard(url) {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+
+  const setStep = (step, detail = '') => {
+    const el = document.getElementById('voice-wizard-step');
+    const sub = document.getElementById('voice-wizard-sub');
+    if (el) el.textContent = step;
+    if (sub && detail) sub.textContent = detail;
+  };
+
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" style="max-width:520px;padding:44px 40px;text-align:center">
+      <div style="font-size:48px;margin-bottom:20px">🧠</div>
+      <div style="font-size:22px;font-weight:800;letter-spacing:-0.03em;margin-bottom:8px">Building your AI writer</div>
+      <div id="voice-wizard-sub" style="font-size:14px;color:var(--text-2);margin-bottom:32px">Reading your past issues…</div>
+
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:32px;text-align:left">
+        <div class="voice-step" id="vstep-1" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--r-md);background:var(--bg-3);border:1px solid var(--border)">
+          <div class="voice-step-icon" style="font-size:18px">⏳</div>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text-1)">Fetching past issues</div>
+            <div style="font-size:12px;color:var(--text-3)">Reading up to 15 of your newsletters</div>
+          </div>
+        </div>
+        <div class="voice-step" id="vstep-2" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--r-md);background:var(--bg-3);border:1px solid var(--border);opacity:0.4">
+          <div class="voice-step-icon" style="font-size:18px">📖</div>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text-1)">Analyzing your writing</div>
+            <div style="font-size:12px;color:var(--text-3)">Voice, rhythm, vocabulary, structure</div>
+          </div>
+        </div>
+        <div class="voice-step" id="vstep-3" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--r-md);background:var(--bg-3);border:1px solid var(--border);opacity:0.4">
+          <div class="voice-step-icon" style="font-size:18px">✍️</div>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text-1)">Building your AI profile</div>
+            <div style="font-size:12px;color:var(--text-3)">Voice profile + audience avatar + section suggestions</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height:4px;background:var(--bg-4);border-radius:99px;overflow:hidden">
+        <div id="voice-progress-bar" style="height:100%;background:var(--accent);border-radius:99px;width:5%;transition:width 0.6s ease"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:8px" id="voice-wizard-step">Starting…</div>
+    </div>
+  </div>`;
+
+  const setProgress = pct => {
+    const bar = document.getElementById('voice-progress-bar');
+    if (bar) bar.style.width = pct + '%';
+  };
+
+  const activateStep = (n) => {
+    for (let i = 1; i <= 3; i++) {
+      const el = document.getElementById(`vstep-${i}`);
+      if (!el) continue;
+      if (i < n) {
+        el.style.opacity = '1';
+        el.style.background = 'var(--green-soft)';
+        el.style.borderColor = 'var(--green)';
+        el.querySelector('.voice-step-icon').textContent = '✓';
+      } else if (i === n) {
+        el.style.opacity = '1';
+        el.style.background = 'var(--accent-soft)';
+        el.style.borderColor = 'var(--accent)';
+      } else {
+        el.style.opacity = '0.4';
+      }
+    }
+  };
+
+  // Run the actual discovery
+  (async () => {
+    try {
+      activateStep(1);
+      setProgress(10);
+      setStep('Fetching past issues…', 'Reading up to 15 of your newsletters');
+
+      const res = await fetch(`/api/discover-voice?url=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Discovery failed');
+
+      activateStep(2);
+      setProgress(45);
+      setStep(`Found ${data.count} issues`, 'Analyzing your writing style…');
+
+      // Track the publication URL
+      if (!state.voiceUrls.includes(url)) state.voiceUrls.push(url);
+      state.brandVoiceSamples = data.text;
+
+      activateStep(3);
+      setProgress(75);
+      setStep('Building your AI profile…', 'Voice profile + audience avatar + section suggestions');
+
+      // If server already did AI analysis, use it directly
+      if (data.voiceProfile) {
+        state.brandVoice = data.voiceProfile;
+        if (data.audienceAvatar && !state.audienceAvatar) state.audienceAvatar = data.audienceAvatar;
+      } else {
+        // Fall back to client-triggered AI call
+        await generateBrandVoice();
+      }
+      // Save immediately before showing results — guarantees nothing is lost
+      await saveUserSettings();
+
+      setProgress(100);
+      await new Promise(r => setTimeout(r, 400));
+
+      // Show results screen
+      showVoiceWizardResults(data, url);
+
+    } catch (e) {
+      closeModal();
+      toast(`Error: ${e.message}`, 'error');
+    }
+  })();
+}
+
+function showVoiceWizardResults(data, url) {
+  const modal = document.getElementById('modal-root');
+  if (!modal) return;
+
+  const sections = data.sectionSuggestions?.length
+    ? data.sectionSuggestions.map(s => `<span style="display:inline-flex;align-items:center;background:var(--bg-4);border:1px solid var(--border-md);border-radius:var(--r-sm);padding:3px 10px;font-size:12px;font-weight:500">${escHtml(s)}</span>`).join('')
+    : '';
+
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" style="max-width:580px;padding:40px;max-height:90vh;overflow-y:auto">
+
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="display:inline-flex;align-items:center;gap:8px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;padding:6px 18px;font-size:13px;font-weight:700;color:var(--green);margin-bottom:16px">
+          ✓ Your AI writer is ready
+        </div>
+        <div style="font-size:24px;font-weight:800;letter-spacing:-0.03em;margin-bottom:6px">${escHtml(data.source || 'Your Newsletter')}</div>
+        ${data.topicFocus ? `<div style="font-size:14px;color:var(--text-2)">${escHtml(data.topicFocus)}</div>` : ''}
+      </div>
+
+      <!-- Voice Profile -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--accent);margin-bottom:8px">🎙 Voice Profile</div>
+        <div style="font-size:13px;color:var(--text-2);line-height:1.75;background:var(--bg-3);border-radius:var(--r-md);padding:14px 16px;max-height:160px;overflow-y:auto">
+          ${escHtml(state.brandVoice || data.voiceProfile || '').replace(/\n/g, '<br>')}
+        </div>
+      </div>
+
+      <!-- Audience Avatar -->
+      ${(state.audienceAvatar || data.audienceAvatar) ? `
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--accent);margin-bottom:8px">👤 Audience Avatar</div>
+        <div style="font-size:13px;color:var(--text-2);line-height:1.75;background:var(--bg-3);border-radius:var(--r-md);padding:14px 16px;max-height:140px;overflow-y:auto">
+          ${escHtml(state.audienceAvatar || data.audienceAvatar || '').replace(/\n/g, '<br>')}
+        </div>
+      </div>` : ''}
+
+      <!-- Section Suggestions -->
+      ${sections ? `
+      <div style="margin-bottom:28px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--accent);margin-bottom:10px">📋 Suggested Sections</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">${sections}</div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-3)">You can set these as your section defaults in Settings → Section Defaults.</div>
+      </div>` : ''}
+
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="closeModal();navigate('builder')">Start writing →</button>
+        <button class="btn btn-outline" style="flex:1;justify-content:center" onclick="closeModal();navigate('settings')">Edit profile</button>
+      </div>
+      <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:12px">Everything is saved automatically. You can refine it anytime in Settings → Brand Voice.</div>
+    </div>
+  </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+
+  // Save IMMEDIATELY — don't debounce, this is a one-time setup
+  saveUserSettings().then(() => {
+    toast('✓ AI writer saved', 'success');
+  }).catch(() => {
+    toast('Saved locally — will sync when connection restores', 'warn');
+  });
+  refreshVoiceBadge();
+  if (state.view === 'settings') render();
+  if (state.view === 'dashboard') render();
+}
+window.showVoiceWizard = showVoiceWizard;
+
+window.dashStartVoice = function() {
+  const input = document.getElementById('dash-voice-url');
+  let url = input?.value.trim();
+  if (!url) { toast('Paste your newsletter URL first', 'warn'); return; }
+  if (!url.startsWith('http')) url = 'https://' + url;
+  try { new URL(url); } catch { toast('That doesn\'t look like a valid URL', 'warn'); return; }
+  showVoiceWizard(url);
+};
 window.scheduleSettingsSave = scheduleSettingsSave;
 window.refreshVoiceBadge = refreshVoiceBadge;
 
@@ -3995,7 +4413,7 @@ async function getAuthToken() {
 async function startCheckout(plan = 'pro') {
   if (!state.hasStripe) { navigate('subscription'); return; }
   if (!state.user) {
-    _pendingCheckoutPlan = plan;
+    setPendingPlan(plan);
     showAuthModal('signup');
     return;
   }
@@ -4039,6 +4457,44 @@ async function manageBilling() {
 }
 window.manageBilling = manageBilling;
 
+function showContactPopup() {
+  const existing = document.getElementById('contact-popup');
+  if (existing) { existing.remove(); return; }
+  const popup = document.createElement('div');
+  popup.id = 'contact-popup';
+  popup.style.cssText = `
+    position:fixed;bottom:72px;left:50%;transform:translateX(-50%);
+    background:var(--bg-2);border:1px solid var(--border-md);border-radius:var(--r-lg);
+    box-shadow:var(--shadow-xl);padding:20px 24px;z-index:9000;
+    text-align:center;min-width:280px;animation:fade-in 0.15s ease
+  `;
+  popup.innerHTML = `
+    <div style="font-size:13px;font-weight:700;margin-bottom:6px">Get in touch</div>
+    <div style="font-size:13px;color:var(--text-2);margin-bottom:14px">We'd love to hear from you.</div>
+    <a href="mailto:noah@getcuranta.com" style="display:block;background:var(--accent);color:#fff;border-radius:var(--r-md);padding:9px 16px;font-size:13px;font-weight:600;text-decoration:none;margin-bottom:8px">
+      ✉️ noah@getcuranta.com
+    </a>
+    <button onclick="navigator.clipboard.writeText('noah@getcuranta.com');this.textContent='✓ Copied!';setTimeout(()=>this.textContent='Copy email',1500)"
+      style="background:var(--bg-3);border:1px solid var(--border-md);border-radius:var(--r-md);padding:7px 14px;font-size:12px;color:var(--text-2);cursor:pointer;width:100%">
+      Copy email
+    </button>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <button onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank')"
+        style="background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline">
+        Or book a 30-min call →
+      </button>
+    </div>
+  `;
+  document.body.appendChild(popup);
+  // Close on outside click
+  setTimeout(() => {
+    document.addEventListener('click', function handler(e) {
+      if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', handler); }
+    });
+  }, 50);
+}
+window.showContactPopup = showContactPopup;
+
 function isSubscribed() {
   return state.grandfathered || ['active', 'trialing', 'past_due'].includes(state.subscriptionStatus);
 }
@@ -4062,8 +4518,9 @@ function renderTrialBanner() {
   const urgency = days === 0 ? 'var(--red)' : days === 1 ? 'var(--amber)' : 'var(--accent)';
   const msg = days === 0 ? 'Your free trial ends <strong>today</strong>.'
     : `Your free trial ends in <strong>${days} day${days === 1 ? '' : 's'}</strong>.`;
+  const planPrice = state.subscriptionPlan === 'multi' ? '$99/mo' : '$49/mo';
   return `<div class="trial-banner" style="border-color:${urgency};color:${urgency}">
-    <span>⏳ ${msg} After that you'll be charged $49/mo.</span>
+    <span>⏳ ${msg} After that you'll be charged ${planPrice}.</span>
     <button class="btn btn-sm" style="background:${urgency};color:#fff;flex-shrink:0" data-action="navigate" data-view="subscription">Manage →</button>
   </div>`;
 }

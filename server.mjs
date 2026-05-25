@@ -53,7 +53,7 @@ async function sbGet(table, filter, authToken) {
 
 async function sbPatch(table, filter, updates, useServiceRole = false) {
   const key = useServiceRole ? SUPABASE_SVC_KEY : SUPABASE_ANON_KEY;
-  await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, {
     method: 'PATCH',
     headers: {
       apikey: key,
@@ -63,6 +63,10 @@ async function sbPatch(table, filter, updates, useServiceRole = false) {
     },
     body: JSON.stringify(updates),
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    console.error(`[sbPatch] ${table} FAILED (${res.status}):`, text.slice(0, 300));
+  }
 }
 
 // ── Stripe Webhook — MUST be before express.json() ───────────────────────────
@@ -86,7 +90,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         // Detect which plan was purchased by comparing price IDs
         const priceId = sub.items?.data?.[0]?.price?.id || '';
         const plan = (STRIPE_MULTI_PRICE_ID && priceId === STRIPE_MULTI_PRICE_ID) ? 'multi' : 'pro';
-        await sbPatch('user_settings', `user_id=eq.${userId}`, {
+        await sbPatch('user_settings', `user_id=eq.${encodeURIComponent(userId)}`, {
           subscription_status: sub.status,
           subscription_plan: plan,
           stripe_customer_id: obj.customer,
@@ -318,6 +322,41 @@ async function fetchArticle(url) {
     $('meta[property="og:site_name"]').attr('content') ||
     new URL(url).hostname.replace(/^www\./, '');
 
+  // Extract images — og:image first, then prominent content images
+  const pageBase = new URL(url);
+  const seenImages = new Set();
+  const images = [];
+
+  const addImage = (src) => {
+    if (!src) return;
+    try {
+      const abs = new URL(src, pageBase).href;
+      if (seenImages.has(abs)) return;
+      // Skip tiny icons, tracking pixels, SVGs, data URIs
+      if (abs.startsWith('data:')) return;
+      if (/\.(svg|ico|gif)(\?|$)/i.test(abs)) return;
+      if (/\/(icon|logo|avatar|spinner|pixel|badge|emoji)/i.test(abs)) return;
+      seenImages.add(abs);
+      images.push(abs);
+    } catch { /* bad URL */ }
+  };
+
+  // Priority 1: Open Graph / Twitter card (usually the hero image)
+  addImage($('meta[property="og:image"]').attr('content'));
+  addImage($('meta[name="twitter:image"]').attr('content'));
+  addImage($('meta[name="twitter:image:src"]').attr('content'));
+
+  // Priority 2: <img> tags inside article content — skip thumbnails < ~300px
+  $('article img, [class*="content"] img, [class*="body"] img, main img').each((_, el) => {
+    if (images.length >= 6) return false; // stop after 6
+    const src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
+    const w = parseInt($(el).attr('width') || '0', 10);
+    const h = parseInt($(el).attr('height') || '0', 10);
+    if (w && w < 200) return; // skip small images
+    if (h && h < 150) return;
+    addImage(src);
+  });
+
   return {
     id: crypto.randomUUID(),
     title: title.trim().slice(0, 200),
@@ -328,6 +367,8 @@ async function fetchArticle(url) {
     publishedAt,
     timeAgo: timeAgo(publishedAt),
     type: 'article',
+    images: images.slice(0, 6), // max 6 images
+    imageUrl: images[0] || null, // primary image
   };
 }
 
@@ -354,11 +395,17 @@ app.get('/api/ingest', async (req, res) => {
           timeAgo: timeAgo(item.pubDate || item.isoDate || new Date().toISOString()),
           type: 'rss',
         };
-        // Best-effort: fetch full article text
+        // Best-effort: fetch full article text + images
         if (item.link) {
           try {
             const full = await fetchArticle(item.link);
-            return { ...base, text: full.text, summary: base.summary || full.summary };
+            return {
+              ...base,
+              text: full.text,
+              summary: base.summary || full.summary,
+              images: full.images || [],
+              imageUrl: full.imageUrl || null,
+            };
           } catch {
             return base;
           }
@@ -388,6 +435,18 @@ app.get('/api/ingest', async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ error: `Could not parse URL: ${e.message}` });
+  }
+});
+
+// ── /api/extract-images ───────────────────────────────────────────────────────
+app.get('/api/extract-images', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url required' });
+  try {
+    const article = await fetchArticle(url);
+    res.json({ images: article.images || [], imageUrl: article.imageUrl || null });
+  } catch (e) {
+    res.status(500).json({ error: e.message, images: [] });
   }
 });
 
@@ -478,19 +537,17 @@ app.get('/api/discover-voice', async (req, res) => {
     });
   }
 
-  // Extract content from each issue
-  const items = feed.items.slice(0, 12);
+  // Extract content from each issue — take up to 15, larger char budget
+  const items = feed.items.slice(0, 15);
   const results = await Promise.allSettled(items.map(async item => {
-    // Prefer full content embedded in RSS (Substack/Beehiiv include this)
     const rssBody = stripHtml(item['content:encoded'] || item.content || '').replace(/\s+/g, ' ').trim();
     if (rssBody.length > 600) {
-      return { title: item.title || 'Untitled', text: rssBody.slice(0, 5000) };
+      return { title: item.title || 'Untitled', text: rssBody.slice(0, 8000) };
     }
-    // Fall back to fetching the article page
     if (item.link) {
       try {
         const art = await fetchArticle(item.link);
-        if (art.text?.length > 200) return { title: item.title || art.title, text: art.text };
+        if (art.text?.length > 200) return { title: item.title || art.title, text: art.text.slice(0, 8000) };
       } catch { /* use snippet */ }
     }
     return rssBody.length > 100 ? { title: item.title || 'Untitled', text: rssBody } : null;
@@ -510,7 +567,53 @@ app.get('/api/discover-voice', async (req, res) => {
     .map((iss, i) => `=== Issue ${i + 1}: ${iss.title} ===\n${iss.text}`)
     .join('\n\n');
 
-  res.json({ count: issues.length, source: feed.title || base.hostname, text: combined });
+  // Run deep AI analysis — generates voice profile, audience avatar, and section defaults
+  try {
+    const aiRes = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4000,
+      system: `You are an expert writing analyst and brand strategist. You will analyze newsletter issues and produce a comprehensive AI writer profile. Your output must be valid JSON — no markdown, no commentary, just the JSON object.`,
+      messages: [{
+        role: 'user',
+        content: `Analyze these ${issues.length} newsletter issues and produce a JSON object with EXACTLY these keys:
+
+{
+  "voiceProfile": "3-4 paragraph voice profile written as direct instructions to an AI that will ghost-write future issues. Be extremely specific: quote actual phrases from the samples, describe sentence rhythm (short punchy vs long flowing), vocabulary level, how they open each piece, how they close, their relationship with data vs opinion, use of humor or irony, what they NEVER do, and what makes their voice unmistakable. This should read like a style guide an editor gave a new writer.",
+  "audienceAvatar": "2 paragraph description of the ideal subscriber. Infer from the content: what industry or topic they care about, their experience level, when and why they read this newsletter, what they want to feel after reading it, what they already know (so the writer doesn't over-explain), and what they value most. Write it in second person as if briefing the AI: 'Your reader is...'",
+  "newsletterName": "Best guess at the newsletter's name or publication from the content",
+  "topicFocus": "One sentence: what is this newsletter fundamentally about?",
+  "sectionSuggestions": ["array of 4-6 section names that fit this newsletter's style, e.g. 'Today's Briefing', 'The Big Story', 'Quick Hits', 'What To Watch'"]
+}
+
+Newsletter content to analyze:
+
+${combined.slice(0, 60000)}`,
+      }],
+    });
+
+    let profile;
+    try {
+      const raw = aiRes.content[0].text.trim();
+      const jsonStr = raw.startsWith('{') ? raw : raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+      profile = JSON.parse(jsonStr);
+    } catch {
+      // If JSON parse fails, return raw text as voiceProfile only
+      profile = { voiceProfile: aiRes.content[0].text, audienceAvatar: '', newsletterName: feed.title || base.hostname, topicFocus: '', sectionSuggestions: [] };
+    }
+
+    res.json({
+      count: issues.length,
+      source: profile.newsletterName || feed.title || base.hostname,
+      text: combined,
+      voiceProfile: profile.voiceProfile || '',
+      audienceAvatar: profile.audienceAvatar || '',
+      topicFocus: profile.topicFocus || '',
+      sectionSuggestions: profile.sectionSuggestions || [],
+    });
+  } catch (e) {
+    // If AI fails, return raw text so client can still generate voice
+    res.json({ count: issues.length, source: feed.title || base.hostname, text: combined });
+  }
 });
 
 // ── AI tone descriptions ──────────────────────────────────────────────────────
@@ -647,7 +750,7 @@ app.post('/api/ai', async (req, res) => {
           if (resetAt < thirtyDaysAgo) {
             sbPatch('user_settings', `user_id=eq.${userId}`,
               { generations_this_month: 1, generations_reset_at: new Date().toISOString() },
-              false); // fire-and-forget
+              false); // fire-and-forget — resets counter and stamps new 30-day window
           } else if ((settings.generations_this_month || 0) >= GENERATION_LIMIT) {
             return res.status(429).json({
               error: 'generation_limit',
@@ -777,8 +880,21 @@ You write newsletter calls-to-action that convert. 2–3 sentences. Make it feel
       user: `Analyze these briefing examples and write a prompt that would reproduce this exact style:\n\n${content.text || content.summary}`,
     },
     'brand-voice': {
-      system: `You are a brand strategist and writing coach. Analyze multiple newsletter issues and produce a detailed but concise brand voice profile (150-250 words) the writer can reference and edit. Structure it as a paragraph or two covering: overall tone and personality, sentence length and rhythm, vocabulary and formality level, how they use data/opinion/humor, how they open and close pieces, any signature phrases or structural patterns, and what makes their voice distinctly theirs. Be specific — quote short phrases or patterns from the samples where possible. Write it as instructions for an AI to reproduce the voice, not as a critique.`,
-      user: `Analyze these newsletter issues and create a brand voice profile:\n\n${content.text || content.summary}`,
+      system: `You are an expert writing analyst and brand strategist. You analyze newsletter content to produce a detailed AI ghost-writer profile — specific enough that an AI can reproduce the author's voice with high fidelity.
+
+Write a voice profile of 200-300 words structured as direct instructions to an AI writer. Cover ALL of the following:
+- Overall tone and personality (e.g. "authoritative but not pompous, dry wit, never cheerful")
+- Sentence rhythm and length patterns (e.g. "leads with short punchy sentences, expands in the middle, closes short")
+- Vocabulary level and register (e.g. "professional but never academic, avoids jargon unless it's industry-standard")
+- How they use data vs opinion (e.g. "always leads with a number, then editorialises")
+- Opening pattern for each piece (e.g. "never wastes the first line, always a hard fact or provocative claim")
+- Closing pattern (e.g. "ends with a forward-looking question or one-line kicker, no summary")
+- What they NEVER do (e.g. "never uses passive voice, never writes 'it is worth noting', never uses exclamation marks")
+- Signature phrases, transitions, or structural patterns
+- What makes their voice unmistakably theirs
+
+Quote actual short phrases or patterns from the samples to make the profile concrete. Write it as a style guide, not a critique.`,
+      user: `Analyze these newsletter issues and write the AI voice profile:\n\n${content.text || content.summary}`,
     },
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
@@ -809,7 +925,7 @@ Examples:
   const p = prompts[action] || prompts.rewrite;
 
   // Allow more tokens for long-form pieces; quick hits need far less
-  const maxTokens = ['lead-story', 'rewrite', 'brand-voice'].includes(action) ? 2000 : 1200;
+  const maxTokens = action === 'brand-voice' ? 3000 : ['lead-story', 'rewrite'].includes(action) ? 2000 : 1200;
 
   try {
     const message = await anthropic.messages.create({
@@ -959,6 +1075,10 @@ function buildBeehiivHTML(newsletter) {
 </body>
 </html>`;
 }
+
+// Legal pages (standalone HTML, not the SPA)
+app.get('/privacy', (_req, res) => res.sendFile(join(__dirname, 'public', 'privacy.html')));
+app.get('/terms',   (_req, res) => res.sendFile(join(__dirname, 'public', 'terms.html')));
 
 // Catch-all SPA route
 app.get('*', (_req, res) => {
