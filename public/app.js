@@ -3048,7 +3048,7 @@ function confirmInsertImage(articleId, sectionId) {
   if (!url) { toast('Enter an image URL', 'warn'); return; }
   const article = state.newsletter.sections[sectionId]?.find(a => a.id === articleId);
   if (!article) return;
-  article.content = (article.content || article.summary || '') + `\n\n![Image](${url})`;
+  article.content = `![Image](${url})\n\n` + (article.content || article.summary || '');
   closeModal();
   refreshSectionContent(sectionId);
   scheduleSave();
