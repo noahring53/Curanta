@@ -6,10 +6,44 @@ import { load } from 'cheerio';
 import Parser from 'rss-parser';
 import Anthropic from '@anthropic-ai/sdk';
 import Stripe from 'stripe';
+import rateLimit from 'express-rate-limit';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down.' },
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30, // 30 AI generations per 15 min per IP
+  message: { error: 'AI rate limit reached. Please wait a few minutes.' },
+});
+
+const voiceLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // voice discovery is expensive
+  message: { error: 'Voice discovery limit reached. Please try again in an hour.' },
+});
+
+const ingestLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many feed requests. Please wait a few minutes.' },
+});
+
+const stripeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many billing requests. Please try again later.' },
+});
 
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -145,6 +179,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(__dirname, 'public')));
+app.use(globalLimiter);
 
 // ── /api/config ───────────────────────────────────────────────────────────────
 app.get('/api/config', (_req, res) => {
@@ -158,7 +193,7 @@ app.get('/api/config', (_req, res) => {
 });
 
 // ── /api/stripe/checkout ──────────────────────────────────────────────────────
-app.post('/api/stripe/checkout', async (req, res) => {
+app.post('/api/stripe/checkout', stripeLimiter, async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
   const { userId, authToken, email, plan } = req.body; // plan: 'pro' (default) | 'multi'
   if (!userId || !authToken) return res.status(400).json({ error: 'Missing auth' });
@@ -204,7 +239,7 @@ app.post('/api/stripe/checkout', async (req, res) => {
 });
 
 // ── /api/stripe/portal ────────────────────────────────────────────────────────
-app.post('/api/stripe/portal', async (req, res) => {
+app.post('/api/stripe/portal', stripeLimiter, async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Stripe not configured' });
   const { userId, authToken } = req.body;
   if (!userId || !authToken) return res.status(400).json({ error: 'Missing auth' });
@@ -373,7 +408,7 @@ async function fetchArticle(url) {
 }
 
 // ── /api/ingest ───────────────────────────────────────────────────────────────
-app.get('/api/ingest', async (req, res) => {
+app.get('/api/ingest', ingestLimiter, async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'url is required' });
 
@@ -439,7 +474,7 @@ app.get('/api/ingest', async (req, res) => {
 });
 
 // ── /api/extract-images ───────────────────────────────────────────────────────
-app.get('/api/extract-images', async (req, res) => {
+app.get('/api/extract-images', ingestLimiter, async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'url required' });
   try {
@@ -451,7 +486,7 @@ app.get('/api/extract-images', async (req, res) => {
 });
 
 // ── /api/discover-voice ───────────────────────────────────────────────────────
-app.get('/api/discover-voice', async (req, res) => {
+app.get('/api/discover-voice', voiceLimiter, async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'url required' });
 
@@ -717,7 +752,7 @@ function mockResponse(action, content, contents = []) {
 }
 
 // ── /api/ai ───────────────────────────────────────────────────────────────────
-app.post('/api/ai', async (req, res) => {
+app.post('/api/ai', aiLimiter, async (req, res) => {
   const {
     action,
     content = {},
