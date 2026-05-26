@@ -464,14 +464,14 @@ function renderLanding() {
   </nav>
 
   <section class="hero">
-    <div class="hero-eyebrow animate-in">✦ AI-Powered Newsletter Production</div>
-    <h1 class="animate-in animate-in-d1">Create publish-ready newsletters<br>in <span>minutes</span>, not hours.</h1>
-    <p class="hero-sub animate-in animate-in-d2">Feed any RSS feed or article URL. AI writes it in your voice. You hit publish.</p>
+    <div class="hero-eyebrow animate-in">✦ For newsletter creators who publish on a schedule</div>
+    <h1 class="animate-in animate-in-d1">Your newsletter,<br>written in <span>15 minutes</span>.</h1>
+    <p class="hero-sub animate-in animate-in-d2">Paste your RSS feeds. AI writes lead stories, quick hits, and subject lines in your voice. Export straight to Beehiiv, Mailchimp, or Kit.</p>
     <div class="hero-actions animate-in animate-in-d3">
-      <button class="btn btn-primary" data-action="start-trial">Choose your plan →</button>
+      <button class="btn btn-primary" data-action="start-trial">Try free for 7 days →</button>
       <button class="btn btn-outline" onclick="document.getElementById('how').scrollIntoView({behavior:'smooth'})">See how it works</button>
     </div>
-    <p class="hero-note animate-in animate-in-d4">7-day free trial · Card required to start · No charge until day 8 · Cancel anytime</p>
+    <p class="hero-note animate-in animate-in-d4">7-day free trial · No charge until day 8 · Cancel anytime</p>
 
     <div class="hero-visual-wrap">
       <div class="demo-browser">
@@ -543,80 +543,93 @@ function renderLanding() {
   </section>
 
   <div class="social-strip">
-    <div class="social-item"><strong>15 min</strong> avg. time to publish</div>
-    <div class="social-item"><strong>500</strong> AI generations per month</div>
-    <div class="social-item"><strong>7-day</strong> free trial, no charge until day 8</div>
-    <div class="social-item"><strong>3</strong> publications on Studio plan</div>
+    <div class="social-item"><strong>4 hrs → 15 min</strong> newsletter production time</div>
+    <div class="social-item"><strong>Writes in your voice</strong> not generic AI copy</div>
+    <div class="social-item"><strong>Works with</strong> Beehiiv, Mailchimp, Kit, Substack</div>
+    <div class="social-item"><strong>7-day free trial</strong> no charge until day 8</div>
   </div>
 
   <section class="features-section" id="features">
-    <div class="section-eyebrow">Features</div>
-    <h2 class="section-title">Everything a modern<br>newsletter team needs</h2>
-    <p class="section-sub">Built for publishers, media brands, political newsletters, agencies, and solo creators who take their content seriously.</p>
+    <div class="section-eyebrow">How it saves you time</div>
+    <h2 class="section-title">Newsletter production used to take<br>half your day. Not anymore.</h2>
+    <p class="section-sub">Every part of Curanta is built around one goal: getting you from blank page to scheduled send in under 20 minutes.</p>
     <div class="features-grid">
       <div class="feature-card animate-in">
         <div class="feature-icon">📡</div>
-        <div class="feature-title">RSS & URL Ingestion</div>
-        <div class="feature-desc">Paste any RSS feed or article URL. We fetch, parse, and clean the content instantly — stripping ads, nav, and noise.</div>
+        <div class="feature-title">Your sources, instantly ready</div>
+        <div class="feature-desc">Paste any RSS feed or article URL. Curanta fetches the full text and strips the junk — ads, nav, paywalls, audio widgets — so you only see the story.</div>
       </div>
       <div class="feature-card animate-in animate-in-d1">
         <div class="feature-icon">✍️</div>
-        <div class="feature-title">AI-Powered Writing</div>
-        <div class="feature-desc">From raw article to punchy newsletter prose in seconds. Lead stories, quick hits, CTAs, and subject lines — all AI-generated.</div>
+        <div class="feature-title">AI that actually writes well</div>
+        <div class="feature-desc">Not generic AI slop. Lead stories, quick hits, subject lines, and CTAs — written in your tone, for your audience, from your source material.</div>
       </div>
       <div class="feature-card animate-in animate-in-d2">
         <div class="feature-icon">🎙️</div>
-        <div class="feature-title">Brand Voice System</div>
-        <div class="feature-desc">Paste 3–10 past newsletters. We generate a reusable voice profile so every story sounds unmistakably like you.</div>
+        <div class="feature-title">Sounds exactly like you</div>
+        <div class="feature-desc">Paste your newsletter URL. Curanta reads your past issues and builds an AI writer that matches your voice — your rhythm, your phrases, your style.</div>
       </div>
       <div class="feature-card animate-in animate-in-d3">
         <div class="feature-icon">🎛️</div>
-        <div class="feature-title">Drag-and-Drop Builder</div>
-        <div class="feature-desc">Drag article cards into sections: Lead Story, Quick Hits, or Sponsor CTA. Each section has its own editable AI prompt.</div>
+        <div class="feature-title">Drag, drop, done</div>
+        <div class="feature-desc">Drag articles into your sections. Hit generate. Edit if you want. The whole issue is written before your second cup of coffee.</div>
       </div>
       <div class="feature-card animate-in animate-in-d4">
-        <div class="feature-icon">🎨</div>
-        <div class="feature-title">Audience Avatar</div>
-        <div class="feature-desc">Describe your average reader once. AI uses this on every generation — deciding what to emphasize, explain, and skip.</div>
+        <div class="feature-icon">🎯</div>
+        <div class="feature-title">Knows your reader</div>
+        <div class="feature-desc">Tell Curanta who reads your newsletter once. Every generation after that is calibrated for them — what to emphasize, what to skip, what to explain.</div>
       </div>
       <div class="feature-card animate-in animate-in-d5">
         <div class="feature-icon">📋</div>
-        <div class="feature-title">HTML Export</div>
-        <div class="feature-desc">One-click export to clean HTML. Paste straight into Beehiiv, Mailchimp, Kit, or Substack. No migration, no lock-in.</div>
+        <div class="feature-title">Publish anywhere, instantly</div>
+        <div class="feature-desc">One-click HTML export. Paste straight into Beehiiv, Mailchimp, Kit, or Substack. No reformatting. No copy-paste nightmares. Just send.</div>
       </div>
     </div>
   </section>
 
   <section class="testimonials-section">
-    <div class="section-eyebrow">Early access</div>
-    <h2 class="section-title">Built for newsletter professionals</h2>
-    <div style="max-width:680px;margin:0 auto;text-align:center;color:var(--text-2);font-size:16px;line-height:1.7;padding:0 20px">
-      Curanta is in early access. We're working directly with newsletter creators, media brands, and political communications teams to shape the product.
-      <br><br>
-      If you publish a newsletter and want to cut production time in half,
-      <button class="btn btn-outline" style="margin-left:8px;vertical-align:middle" onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank');event.stopPropagation()">Book a 30-min call →</button>
+    <div class="section-eyebrow">Who it's for</div>
+    <h2 class="section-title">Made for creators who publish on a deadline</h2>
+    <div style="max-width:800px;margin:0 auto;padding:0 20px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;text-align:left">
+        <div style="background:var(--bg-2);border:1px solid var(--border-md);border-radius:var(--r-lg);padding:24px">
+          <div style="font-size:22px;margin-bottom:10px">📰</div>
+          <div style="font-weight:700;margin-bottom:6px;font-size:15px">Solo newsletter creators</div>
+          <div style="color:var(--text-2);font-size:13px;line-height:1.6">You write, curate, and send every issue alone. Curanta compresses production from a half-day to 15 minutes.</div>
+        </div>
+        <div style="background:var(--bg-2);border:1px solid var(--border-md);border-radius:var(--r-lg);padding:24px">
+          <div style="font-size:22px;margin-bottom:10px">📡</div>
+          <div style="font-weight:700;margin-bottom:6px;font-size:15px">Media brands & publishers</div>
+          <div style="color:var(--text-2);font-size:13px;line-height:1.6">Multiple newsletters, multiple brands. Curanta Studio keeps each publication's voice separate and consistent.</div>
+        </div>
+        <div style="background:var(--bg-2);border:1px solid var(--border-md);border-radius:var(--r-lg);padding:24px">
+          <div style="font-size:22px;margin-bottom:10px">🏛️</div>
+          <div style="font-weight:700;margin-bottom:6px;font-size:15px">Political & advocacy teams</div>
+          <div style="color:var(--text-2);font-size:13px;line-height:1.6">News moves fast. Curanta turns breaking coverage into a polished, on-brand send in minutes — not hours.</div>
+        </div>
+      </div>
     </div>
   </section>
 
   <section class="how-section" id="how">
     <div class="how-inner">
       <div class="section-eyebrow">How it works</div>
-      <h2 class="section-title">From feeds to publish-ready<br>in three steps</h2>
+      <h2 class="section-title">From blank page to scheduled send<br>in under 20 minutes</h2>
       <div class="how-steps">
         <div class="how-step">
           <div class="how-number">1</div>
-          <h3>Paste your sources</h3>
-          <p>Add RSS feeds or individual article URLs. We fetch the full text and clean out all the junk — ads, nav, share buttons, audio widgets.</p>
+          <h3>Add your sources <span style="font-size:13px;font-weight:400;color:var(--text-3)">(~2 min)</span></h3>
+          <p>Paste RSS feeds or article URLs. Curanta pulls full text and strips everything that isn't the story — ads, nav, paywalls, audio players.</p>
         </div>
         <div class="how-step">
           <div class="how-number">2</div>
-          <h3>Drag, drop, generate</h3>
-          <p>Drag article cards into your newsletter sections. Hit "Apply" and AI writes the full story in your chosen tone and brand voice.</p>
+          <h3>Drag in, hit generate <span style="font-size:13px;font-weight:400;color:var(--text-3)">(~5 min)</span></h3>
+          <p>Drag articles into your Lead Story, Quick Hits, or Sponsor sections. Click generate. AI writes everything in your voice — lead copy, summaries, subject lines.</p>
         </div>
         <div class="how-step">
           <div class="how-number">3</div>
-          <h3>Export & publish</h3>
-          <p>Copy the HTML, export JSON, or sync directly to Beehiiv, Mailchimp, or Kit. Your newsletter goes out exactly as designed.</p>
+          <h3>Review and send <span style="font-size:13px;font-weight:400;color:var(--text-3)">(~8 min)</span></h3>
+          <p>Tweak anything you want, then export clean HTML and paste it straight into Beehiiv, Mailchimp, Kit, or Substack. Done.</p>
         </div>
       </div>
     </div>
@@ -640,11 +653,11 @@ function renderLanding() {
 
   <section class="pricing-section" id="pricing">
     <div class="section-eyebrow">Pricing</div>
-    <h2 class="section-title">Choose your plan.<br>Start free today.</h2>
-    <p class="section-sub" style="margin:0 auto 16px">7-day free trial on every plan. Cancel before it ends and pay nothing.</p>
+    <h2 class="section-title">Start free. Stay only if it saves you time.</h2>
+    <p class="section-sub" style="margin:0 auto 16px">7-day free trial on every plan. No charge until day 8. Cancel anytime in one click.</p>
     <div class="pricing-value-bar">
-      The average newsletter editor spends <strong>6+ hours per issue</strong>. Curanta gets you to publish in under one.
-      At $49/mo, that's <strong>less than $3 per hour saved</strong> — and your issues will be better.
+      Most newsletter editors spend <strong>4–6 hours per issue</strong>. Curanta users average <strong>under 20 minutes</strong>.
+      At $49/mo, that's about <strong>$1.50 per hour of your time back</strong> — every single week.
     </div>
 
     <div class="pricing-grid">
@@ -719,8 +732,8 @@ function renderLanding() {
       <h3 class="pricing-faq-title">Common questions</h3>
       <div class="faq-grid">
         <div class="faq-item">
-          <div class="faq-q">Do I need a credit card for the trial?</div>
-          <div class="faq-a">Yes — Stripe requires a card to start. You won't be charged until the 7 days are up. Cancel before then and pay absolutely nothing.</div>
+          <div class="faq-q">Do I need a credit card to start?</div>
+          <div class="faq-a">Yes — a card is required to hold your trial. You will not be charged anything until day 8. Cancel any time before then and you pay absolutely nothing.</div>
         </div>
         <div class="faq-item">
           <div class="faq-q">What's the difference between Pro and Studio?</div>
@@ -751,12 +764,12 @@ function renderLanding() {
   </section>
 
   <section class="cta-section">
-    <h2>Ready to publish faster?</h2>
-    <p>Stop spending hours on newsletters. Curanta gets you from brief to publish-ready in minutes.</p>
+    <h2>Your next issue shouldn't take all day.</h2>
+    <p>Start your 7-day free trial. No charge until day 8. Cancel in one click if it's not for you.</p>
     <div class="hero-actions">
-      <button class="btn btn-primary" data-action="start-trial">See plans & start free →</button>
-      <button class="btn btn-outline" onclick="window.open('https://calendly.com/noahrin/60-minute-tutoring-clone','_blank');event.stopPropagation()">Book a demo</button>
+      <button class="btn btn-primary" data-action="start-trial">Try free for 7 days →</button>
     </div>
+    <p style="font-size:12px;color:var(--text-3);margin-top:14px">No charge until day 8 · Cancel anytime · Takes 60 seconds to set up</p>
   </section>
 
   <footer class="landing-footer">
