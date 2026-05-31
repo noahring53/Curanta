@@ -189,6 +189,7 @@ app.get('/api/config', (_req, res) => {
     hasAI: !!process.env.ANTHROPIC_API_KEY,
     stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY ?? '',
     hasStripe: !!process.env.STRIPE_SECRET_KEY,
+    hasBeehiiv: !!(process.env.BEEHIIV_API_KEY && process.env.BEEHIIV_PUBLICATION_ID),
   });
 });
 
@@ -873,11 +874,11 @@ Rules:
 - Avoid colons — they read as corporate
 
 Generate 3 options. Number them. No explanations.`,
-      user: `Write 3 subject lines for this newsletter content:\n${articleContext || customPrompt}`,
+      user: `Write 3 subject lines for this newsletter issue.\n\nNewsletter title: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\n\nToday's Briefing:\n${content.topStoriesContent.slice(0, 800)}` : ''}\n\nContent summary:\n${content.summary || articleContext || customPrompt}`,
     },
     'preview-text': {
-      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Think of it as the second half of the pitch. Drive the open. No emojis.`,
-      user: `Write preview text for:\nSubject: ${content.title || 'Newsletter'}\nContent: ${content.summary || content.text?.slice(0, 300) || customPrompt}`,
+      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Be specific — pull the sharpest detail or stat from the content. Drive the open. No emojis.`,
+      user: `Write preview text for this newsletter issue.\nNewsletter: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\nBriefing highlights:\n${content.topStoriesContent.slice(0, 600)}` : ''}\nContent:\n${content.summary || content.text?.slice(0, 400) || customPrompt}`,
     },
     rewrite: {
       system: `${toneDesc}${voiceNote}${audienceNote}

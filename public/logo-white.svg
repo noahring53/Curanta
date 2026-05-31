@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 52" width="220" height="52" role="img" aria-label="Curanta">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@800&amp;display=swap');
+    </style>
+  </defs>
+  <!-- Four-pointed star mark -->
+  <path d="M22 4 L25.6 19.4 L40 22 L25.6 24.6 L22 40 L18.4 24.6 L4 22 L18.4 19.4 Z"
+        fill="#ffffff"/>
+  <!-- Wordmark - white version -->
+  <text x="52" y="31"
+        font-family="'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="26" font-weight="800"
+        letter-spacing="-1.2"
+        fill="#ffffff">Curanta</text>
+</svg>

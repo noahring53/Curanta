@@ -53,6 +53,8 @@ const state = {
   draggedStory: null,
   hasAI: false,
   hasStripe: false,
+  hasBeehiiv: false,
+  defaultPublicationName: 'Default',
   subscriptionStatus: 'inactive', // 'inactive' | 'trialing' | 'active' | 'past_due'
   subscriptionPlan: 'pro',        // 'pro' ($49) | 'multi' ($99, 3 pubs)
   grandfathered: false,
@@ -118,6 +120,8 @@ async function init() {
       state.design.darkMode = false;
       document.documentElement.setAttribute('data-theme', 'light');
     }
+    const savedPubName = localStorage.getItem('lwai_default_pub_name');
+    if (savedPubName) state.defaultPublicationName = savedPubName;
   } catch(e) {}
 
   try {
@@ -125,6 +129,7 @@ async function init() {
     cfg = await res.json();
     state.hasAI = cfg.hasAI;
     state.hasStripe = cfg.hasStripe;
+    state.hasBeehiiv = cfg.hasBeehiiv;
     if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
       sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
       const { data: { session } } = await sb.auth.getSession();
@@ -212,7 +217,7 @@ async function navigate(view, params = {}) {
   if (view === 'dashboard' && sb && state.user) {
     state.dbNewsletters = await loadNewslettersFromDB();
   }
-  if (view === 'sources' && sb && state.user && state.sources.length === 0) {
+  if (view === 'sources' && sb && state.user) {
     state.sources = await loadSourcesFromDB();
     autoFetchSources();
   }
@@ -273,6 +278,7 @@ function handleClick(e) {
     case 'switch-publication': switchPublication(d.id || null); break;
     case 'delete-publication': deletePublication(d.id); break;
     case 'rename-publication': renamePublication(d.id); break;
+    case 'rename-default-publication': renameDefaultPublication(); break;
     case 'open-builder':    navigate('builder'); break;
     case 'open-newsletter': navigate('builder', { id: d.id }); break;
     case 'show-auth':       showAuthModal(d.tab || 'login'); break;
@@ -344,6 +350,8 @@ function handleClick(e) {
     case 'close-preview':   closePreview(); break;
     case 'copy-html':       copyHTML(); break;
     case 'export-json':     exportJSON(); break;
+    case 'copy-beehiiv-section': copyBeehiivSection(d.section); break;
+    case 'beehiiv-paste-modal': showBeehiivPasteModal(); break;
     case 'mock-sync':       d.platform === 'beehiiv' ? publishToBeehiiv() : mockSync(d.platform); break;
     case 'request-review':  setApproval('review'); break;
     case 'approve':         setApproval('approved'); break;
@@ -1415,7 +1423,13 @@ function renderDashboard() {
   <div class="app-main">
     ${renderTrialBanner()}
     <div class="app-topbar">
-      <div class="page-title">Dashboard</div>
+      <div>
+        <div class="page-title">Dashboard</div>
+        ${canUsePubs() ? `<div style="font-size:12px;color:var(--text-3);margin-top:2px">
+          📰 <span style="color:var(--text-2);font-weight:600">${escHtml(currentPublicationName())}</span>
+          <button class="btn btn-ghost btn-sm" data-action="navigate" data-view="publications" style="font-size:11px;padding:2px 7px;margin-left:4px">Switch →</button>
+        </div>` : ''}
+      </div>
       <div class="flex items-center gap-2">
         <button class="btn btn-primary" data-action="open-builder">+ New Newsletter</button>
       </div>
@@ -1770,9 +1784,11 @@ function renderPublicationsPage() {
               ? `<button class="btn btn-outline btn-sm" data-action="navigate" data-view="settings">Edit settings →</button>`
               : `<button class="btn btn-outline btn-sm" data-action="switch-publication" data-id="${pub.id || ''}">Switch</button>`
             }
-            ${!pub.isDefault ? `
-            <button class="btn-icon" title="Rename" data-action="rename-publication" data-id="${pub.id}" style="font-size:14px">✎</button>
-            <button class="btn-icon" title="Delete" data-action="delete-publication" data-id="${pub.id}" style="font-size:14px;color:var(--text-3)">🗑</button>` : ''}
+            ${pub.isDefault
+              ? `<button class="btn-icon" title="Rename" data-action="rename-default-publication" style="font-size:14px">✎</button>`
+              : `<button class="btn-icon" title="Rename" data-action="rename-publication" data-id="${pub.id}" style="font-size:14px">✎</button>
+                 <button class="btn-icon" title="Delete" data-action="delete-publication" data-id="${pub.id}" style="font-size:14px;color:var(--text-3)">🗑</button>`
+            }
           </div>
         </div>`;
         }).join('')}
@@ -2051,7 +2067,18 @@ function renderSettingsPage() {
             <span>Stripe (Payments)</span>
             <span class="badge ${state.hasStripe ? 'badge-green' : 'badge-default'}">${state.hasStripe ? '✓ Connected' : 'Not configured'}</span>
           </div>
+          <div class="settings-api-row">
+            <span>Beehiiv (Publish)</span>
+            <span class="badge ${state.hasBeehiiv ? 'badge-green' : 'badge-default'}">${state.hasBeehiiv ? '✓ Connected' : 'Not configured'}</span>
+          </div>
         </div>
+        ${!state.hasBeehiiv ? `
+        <div style="margin-top:14px;padding:14px 16px;background:var(--bg-3);border-radius:var(--r-md);font-size:12px;color:var(--text-2);line-height:1.7">
+          To enable one-click Beehiiv publishing, add to your <code style="font-family:var(--font-mono);background:var(--bg-4);padding:1px 5px;border-radius:3px">.env</code> file:<br>
+          <code style="font-family:var(--font-mono);font-size:11px;color:var(--text-1)">BEEHIIV_API_KEY=your-key</code><br>
+          <code style="font-family:var(--font-mono);font-size:11px;color:var(--text-1)">BEEHIIV_PUBLICATION_ID=pub_xxx...</code><br>
+          <span style="color:var(--text-3)">Find your API key at app.beehiiv.com → Settings → API. Your Publication ID appears in the URL when you open your publication.</span>
+        </div>` : ''}
       </div>
 
       `}
@@ -2068,7 +2095,7 @@ function renderAppNav(active) {
 <nav class="app-nav">
   <div class="app-nav-header">
     <div class="app-nav-logo">${logoSVG(26)}</div>
-    ${state.grandfathered && state.currentPublicationId ? `
+    ${canUsePubs() ? `
     <div class="nav-pub-chip" data-action="navigate" data-view="publications" title="Switch publication">
       📰 ${escHtml(currentPublicationName())}
     </div>` : ''}
@@ -2127,6 +2154,7 @@ function renderBuilder() {
       <span class="save-pill">Auto-saved</span>
     </div>
     <div class="builder-topbar-center">
+      ${canUsePubs() ? `<div class="nav-pub-chip" data-action="navigate" data-view="publications" title="Switch publication">📰 ${escHtml(currentPublicationName())}</div>` : ''}
       ${!state.hasAI ? `<div class="mock-badge">✦ Mock AI</div>` : `<div class="badge badge-green"><span class="dot dot-green"></span> AI Connected</div>`}
       <div id="voice-status-badge">${renderVoiceBadge()}</div>
     </div>
@@ -3606,8 +3634,34 @@ async function aiCTA() {
   state.aiLoading = false; refreshAIPanel();
 }
 
+function buildNewsletterContext() {
+  // Collect all section article titles/summaries + top stories content
+  const parts = [];
+  if (state.newsletter.topStoriesContent?.trim()) {
+    parts.push(`Today's Briefing:\n${state.newsletter.topStoriesContent.trim().slice(0, 1200)}`);
+  }
+  for (const id of state.newsletter.sectionOrder) {
+    const articles = state.newsletter.sections[id] || [];
+    for (const a of articles) {
+      const text = (a.content || a.summary || '').trim().slice(0, 400);
+      if (text) parts.push(text);
+    }
+  }
+  return {
+    title: state.newsletter.title,
+    summary: parts.join('\n\n---\n\n').slice(0, 3000),
+    topStoriesContent: state.newsletter.topStoriesContent?.trim() || '',
+    source: '',
+  };
+}
+
 async function generateSubjectLines() {
-  const content = getFirstSectionArticle() || { title: state.newsletter.title, summary: '', source: '' };
+  const content = buildNewsletterContext();
+  if (!content.summary && !content.topStoriesContent) {
+    const fallback = getFirstSectionArticle();
+    if (!fallback) { toast('Add some content to your newsletter first', 'warn'); return; }
+    Object.assign(content, fallback);
+  }
   state.aiLoading = true; refreshAIPanel();
   try {
     state.aiResult = await callAI('subject-line', content);
@@ -3627,7 +3681,11 @@ async function generateSubjectLines() {
 }
 
 async function generatePreviewText() {
-  const content = getFirstSectionArticle() || { title: state.newsletter.title, summary: '' };
+  const content = buildNewsletterContext();
+  if (!content.summary && !content.topStoriesContent) {
+    const fallback = getFirstSectionArticle();
+    if (fallback) Object.assign(content, fallback);
+  }
   state.aiLoading = true; refreshAIPanel();
   try {
     state.aiResult = await callAI('preview-text', content);
@@ -3760,7 +3818,8 @@ function renderDesignPanel() {
 <div class="panel-section">
   <div class="panel-section-title">Publish to</div>
   <div style="display:flex;flex-direction:column;gap:5px">
-    <button class="integration-btn" data-action="mock-sync" data-platform="beehiiv">🐝 Sync to Beehiiv</button>
+    <button class="integration-btn" data-action="beehiiv-paste-modal">🐝 Copy for Beehiiv</button>
+    <button class="integration-btn" data-action="mock-sync" data-platform="beehiiv" style="font-size:11px;opacity:0.7">🐝 API: Push draft to Beehiiv</button>
     <button class="integration-btn" data-action="mock-sync" data-platform="mailchimp">📧 Sync to Mailchimp</button>
     <button class="integration-btn" data-action="mock-sync" data-platform="kit">💌 Sync to Kit</button>
   </div>
@@ -4192,6 +4251,34 @@ function scheduleSettingsSave() {
 
 async function saveUserSettings() {
   if (!sb || !state.user) return;
+
+  if (state.currentPublicationId) {
+    // A non-default publication is active. Persist the brand-voice/audience/tone/prompts
+    // ONLY to that publication's row — never to user_settings (which is the Default's store).
+    // This prevents one publication's voice from overwriting another's.
+    const pubFields = {
+      brand_voice:     state.brandVoice      || '',
+      audience_avatar: state.audienceAvatar  || '',
+      tone:            state.tone            || 'punchy-executive',
+      default_prompts: state.defaultPrompts  || {},
+    };
+    const { error } = await sb.from('publications').update(pubFields)
+      .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
+    if (error) console.error('Publication settings save error:', error);
+    // Keep local cache in sync
+    const idx = state.publications.findIndex(p => p.id === state.currentPublicationId);
+    if (idx >= 0) state.publications[idx] = { ...state.publications[idx], ...pubFields };
+
+    // Still persist account-level (non-publication) fields to user_settings.
+    const { error: acctErr } = await sb.from('user_settings').update({
+      brand_color: state.design.primaryColor || '#6366f1',
+      updated_at: new Date().toISOString(),
+    }).eq('user_id', state.user.id);
+    if (acctErr) console.error('Account settings save error:', acctErr);
+    return;
+  }
+
+  // Default publication active — its settings live in user_settings.
   const { error } = await sb.from('user_settings').upsert({
     user_id: state.user.id,
     brand_voice: state.brandVoice || '',
@@ -4204,21 +4291,6 @@ async function saveUserSettings() {
     updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id' });
   if (error) console.error('Settings save error:', error);
-
-  // If a publication is active, also persist its settings to the publications table
-  if (state.currentPublicationId) {
-    const pubFields = {
-      brand_voice:     state.brandVoice      || '',
-      audience_avatar: state.audienceAvatar  || '',
-      tone:            state.tone            || 'punchy-executive',
-      default_prompts: state.defaultPrompts  || {},
-    };
-    await sb.from('publications').update(pubFields)
-      .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
-    // Keep local cache in sync
-    const idx = state.publications.findIndex(p => p.id === state.currentPublicationId);
-    if (idx >= 0) state.publications[idx] = { ...state.publications[idx], ...pubFields };
-  }
 }
 
 async function loadUserSettings() {
@@ -4242,9 +4314,15 @@ async function loadUserSettings() {
   if (data.generations_this_month != null) state.generationsThisMonth = data.generations_this_month;
   if (data.trial_ends_at)                 state.trialEndsAt          = data.trial_ends_at;
 
-  // Load publications for grandfathered users, then apply active publication settings
-  if (data.grandfathered) {
+  // Load publications for multi-pub-capable users, then restore + apply the last active publication
+  if (data.grandfathered || (data.subscription_plan === 'multi')) {
     await loadPublications();
+    try {
+      const savedPub = localStorage.getItem('lwai_current_pub');
+      if (savedPub && state.publications.some(p => p.id === savedPub)) {
+        state.currentPublicationId = savedPub;
+      }
+    } catch (e) {}
     applyCurrentPublication();
   }
 }
@@ -4267,7 +4345,7 @@ function applyCurrentPublication() {
 }
 
 function currentPublicationName() {
-  if (!state.currentPublicationId) return 'Default';
+  if (!state.currentPublicationId) return state.defaultPublicationName || 'Default';
   return state.publications.find(p => p.id === state.currentPublicationId)?.name || 'Default';
 }
 
@@ -4369,6 +4447,10 @@ async function switchPublication(id) {
   // Save current before switching
   await saveUserSettings();
   state.currentPublicationId = id;
+  try {
+    if (id) localStorage.setItem('lwai_current_pub', id);
+    else localStorage.removeItem('lwai_current_pub');
+  } catch (e) {}
   if (id === null) {
     // Switch back to default — reload from user_settings
     const { data } = await sb.from('user_settings').select('*').eq('user_id', state.user.id).single();
@@ -4381,6 +4463,10 @@ async function switchPublication(id) {
   } else {
     applyCurrentPublication();
   }
+  // Reload sources scoped to the new publication
+  state.sources = await loadSourcesFromDB();
+  // Fetch articles for the newly loaded sources in the background
+  autoFetchSources();
   render();
   toast(`Switched to "${currentPublicationName()}"`, 'success');
 }
@@ -4408,6 +4494,14 @@ async function renamePublication(id) {
   const { error } = await sb.from('publications').update({ name: newName.trim() }).eq('id', id).eq('user_id', state.user.id);
   if (error) { toast('Rename failed', 'error'); return; }
   pub.name = newName.trim();
+  render();
+}
+
+function renameDefaultPublication() {
+  const newName = window.prompt('Rename default publication:', state.defaultPublicationName || 'Default');
+  if (!newName?.trim()) return;
+  state.defaultPublicationName = newName.trim();
+  try { localStorage.setItem('lwai_default_pub_name', newName.trim()); } catch(e) {}
   render();
 }
 
@@ -4666,13 +4760,22 @@ function resetNewsletter() {
 
 async function saveSourceToDB(source) {
   if (!sb || !state.user) return;
-  const { data, error } = await sb.from('sources').upsert({
-    user_id: state.user.id,
-    feed_url: source.feedUrl,
-    title: source.title,
-    type: source.type,
-  }, { onConflict: 'user_id,feed_url' }).select('id').single();
-  if (error) { console.error('Source save error:', error); return; }
+  const pubId = state.currentPublicationId || null;
+  // Try saving with publication_id; fall back to without if column doesn't exist yet
+  const payload = { user_id: state.user.id, feed_url: source.feedUrl, title: source.title, type: source.type };
+  const { data, error } = await sb.from('sources').upsert(
+    { ...payload, publication_id: pubId },
+    { onConflict: 'user_id,feed_url,publication_id' }
+  ).select('id').single();
+  if (error) {
+    // Column likely doesn't exist — fall back to basic upsert without publication_id
+    const { data: fallback, error: fallbackErr } = await sb.from('sources').upsert(
+      payload, { onConflict: 'user_id,feed_url' }
+    ).select('id').single();
+    if (fallbackErr) { console.error('Source save error:', fallbackErr); return; }
+    if (fallback?.id) source.id = fallback.id;
+    return;
+  }
   if (data?.id) source.id = data.id;
 }
 
@@ -4684,15 +4787,23 @@ async function deleteSourceFromDB(sourceId) {
 
 async function loadSourcesFromDB() {
   if (!sb || !state.user) return [];
-  const { data, error } = await sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
-  if (error) { console.error('Load sources error:', error); return []; }
-  return data.map(s => ({
-    id: s.id,
-    feedUrl: s.feed_url,
-    title: s.title || s.feed_url,
-    type: s.type || 'feed',
-    articles: [],
-    collapsed: false,
+  const pubId = state.currentPublicationId || null;
+  // Try scoped query first; fall back to unscoped if publication_id column doesn't exist yet
+  let query = sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
+  const scopedQuery = pubId ? query.eq('publication_id', pubId) : query.is('publication_id', null);
+  const { data, error } = await scopedQuery;
+  if (error) {
+    // Column likely doesn't exist yet — fall back to loading all user's sources
+    const { data: fallback, error: fallbackErr } = await sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
+    if (fallbackErr) { console.error('Load sources error:', fallbackErr); return []; }
+    return (fallback || []).map(s => ({
+      id: s.id, feedUrl: s.feed_url, title: s.title || s.feed_url,
+      type: s.type || 'feed', articles: [], collapsed: false,
+    }));
+  }
+  return (data || []).map(s => ({
+    id: s.id, feedUrl: s.feed_url, title: s.title || s.feed_url,
+    type: s.type || 'feed', articles: [], collapsed: false,
   }));
 }
 
@@ -4713,10 +4824,91 @@ function autoFetchSources() {
   });
 }
 
+// ── BEEHIIV PASTE MODAL ───────────────────────────────────────────────────────
+function sectionPlainText(articles) {
+  return articles
+    .map(a => (a.content || a.summary || '').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+}
+
+function showBeehiivPasteModal() {
+  const nl = state.newsletter;
+  const sectionOrder = nl.sectionOrder || ['topStories', 'leadStory', 'quickHits', 'cta'];
+  const sectionMeta  = nl.sectionMeta  || {};
+
+  const hasTopStories = nl.topStoriesContent?.trim();
+  const sections = [];
+
+  if (hasTopStories) {
+    sections.push({ id: 'topStories', name: sectionMeta.topStories?.name || "Today's Briefing", text: nl.topStoriesContent.trim() });
+  }
+
+  for (const id of sectionOrder) {
+    if (id === 'topStories') continue;
+    const articles = nl.sections?.[id] ?? [];
+    if (!articles.length) continue;
+    const text = sectionPlainText(articles);
+    if (!text) continue;
+    sections.push({ id, name: sectionMeta[id]?.name || id, text });
+  }
+
+  if (!sections.length) {
+    toast('Add some content to your newsletter first', 'warn');
+    return;
+  }
+
+  const modal = document.getElementById('modal-root');
+  modal.innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" style="max-width:640px;padding:0;overflow:hidden">
+      <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border-md);display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="modal-title" style="margin:0">Copy for Beehiiv</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Copy each section and paste directly into Beehiiv's editor</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" data-action="close-modal" style="font-size:20px;padding:2px 8px">×</button>
+      </div>
+      <div style="padding:16px 24px;display:flex;flex-direction:column;gap:12px;max-height:70vh;overflow-y:auto">
+        ${sections.map(s => `
+        <div style="border:1px solid var(--border-md);border-radius:var(--r-md);overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-3);border-bottom:1px solid var(--border-md)">
+            <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-2)">${escHtml(s.name)}</span>
+            <button class="btn btn-outline btn-sm" data-action="copy-beehiiv-section" data-section="${escHtml(s.id)}" style="font-size:11px;padding:4px 10px">⎘ Copy</button>
+          </div>
+          <textarea id="beehiiv-text-${escHtml(s.id)}" readonly
+            style="width:100%;box-sizing:border-box;resize:none;border:none;background:var(--bg-2);color:var(--text-1);font-size:13px;line-height:1.7;padding:12px 14px;font-family:inherit;min-height:80px;outline:none"
+            rows="4"
+          >${escHtml(s.text)}</textarea>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+  modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+}
+
+function copyBeehiivSection(sectionId) {
+  const el = document.getElementById(`beehiiv-text-${sectionId}`);
+  if (!el) return;
+  navigator.clipboard.writeText(el.value)
+    .then(() => {
+      toast('Copied — paste into Beehiiv', 'success');
+      // Flash the button
+      const btn = document.querySelector(`[data-action="copy-beehiiv-section"][data-section="${sectionId}"]`);
+      if (btn) { btn.textContent = '✓ Copied'; setTimeout(() => { btn.innerHTML = '⎘ Copy'; }, 1800); }
+    })
+    .catch(() => toast('Copy failed', 'error'));
+}
+
 // ── BEEHIIV PUBLISH ───────────────────────────────────────────────────────────
 async function publishToBeehiiv() {
   // Save current state first so we always publish the latest version
   if (sb && state.user) await saveNewsletter();
+
+  if (!state.hasBeehiiv) {
+    toast('Beehiiv not configured — add BEEHIIV_API_KEY and BEEHIIV_PUBLICATION_ID to your .env file', 'warn');
+    return;
+  }
 
   const hasContent = state.newsletter.sections.leadStory.length > 0 ||
                      state.newsletter.sections.quickHits.length > 0 ||
