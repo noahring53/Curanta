@@ -1750,7 +1750,7 @@ function renderPublicationsPage() {
     const totalPubs = 1 + state.publications.length; // Default + extras
     const atLimit = totalPubs >= limit;
     const allPubs = [
-      { id: null, name: 'Default', isDefault: true },
+      { id: null, name: state.defaultPublicationName || 'Default', isDefault: true },
       ...state.publications,
     ];
     return `
