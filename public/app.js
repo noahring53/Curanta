@@ -46,6 +46,7 @@ const state = {
   aiLoading: false,
   aiHistory: [],
   aiResult: null,
+  subjectSourceSection: 'leadStory', // which section drives subject/preview generation ('' = whole issue)
   teamComments: [],
   approvalStatus: 'draft', // 'draft' | 'review' | 'approved'
   versions: [],
@@ -3252,6 +3253,14 @@ function renderAIPanel() {
 
 <div class="panel-section">
   <div class="panel-section-title">Subject Lines</div>
+  <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:4px">Base subject &amp; preview on:</label>
+  <select class="input input-sm" onchange="state.subjectSourceSection=this.value" style="width:100%;margin-bottom:6px">
+    <option value="" ${state.subjectSourceSection === '' ? 'selected' : ''}>Whole issue</option>
+    ${state.newsletter.sectionOrder.map(id => {
+      const meta = state.newsletter.sectionMeta[id] || { name: id };
+      return `<option value="${id}" ${state.subjectSourceSection === id ? 'selected' : ''}>${escHtml(meta.name)}</option>`;
+    }).join('')}
+  </select>
   <button class="ai-action-btn" data-action="generate-subjects" ${state.aiLoading ? 'disabled' : ''}>
     ${state.aiLoading ? '<div class="spinner"></div>' : '<span class="ai-action-icon">✉</span>'} Generate subject lines
   </button>
@@ -3634,8 +3643,39 @@ async function aiCTA() {
   state.aiLoading = false; refreshAIPanel();
 }
 
+// Returns the text content of a single section by id (briefing sections use topStoriesContent).
+function sectionTextById(id) {
+  const meta = state.newsletter.sectionMeta[id];
+  if (meta?.type === 'briefing' || id === 'topStories') {
+    return state.newsletter.topStoriesContent?.trim() || '';
+  }
+  const articles = state.newsletter.sections[id] || [];
+  return articles
+    .map(a => (a.content || a.summary || '').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n')
+    .slice(0, 3000);
+}
+
 function buildNewsletterContext() {
-  // Collect all section article titles/summaries + top stories content
+  // If the user picked a specific section to base subject/preview on, scope to it.
+  const picked = state.subjectSourceSection;
+  if (picked && state.newsletter.sectionOrder.includes(picked)) {
+    const text = sectionTextById(picked);
+    if (text) {
+      const meta = state.newsletter.sectionMeta[picked] || { name: picked, type: 'generic' };
+      const isBriefing = meta.type === 'briefing' || picked === 'topStories';
+      return {
+        title: state.newsletter.title,
+        summary: `${meta.name}:\n${text}`.slice(0, 3000),
+        // Surface the chosen section as the briefing highlight so server prompts pull from it
+        topStoriesContent: text.slice(0, 1200),
+        source: '',
+      };
+    }
+  }
+
+  // Otherwise: whole issue — collect all section content + top stories.
   const parts = [];
   if (state.newsletter.topStoriesContent?.trim()) {
     parts.push(`Today's Briefing:\n${state.newsletter.topStoriesContent.trim().slice(0, 1200)}`);
