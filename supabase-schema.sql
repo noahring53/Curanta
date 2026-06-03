@@ -18,14 +18,25 @@ create table if not exists newsletters (
 
 -- ── sources ───────────────────────────────────────────────────────────────────
 create table if not exists sources (
-  id         uuid primary key default gen_random_uuid(),
-  user_id    uuid references auth.users(id) on delete cascade not null,
-  feed_url   text not null,
-  title      text default '',
-  type       text default 'feed',
-  created_at timestamptz default now(),
-  unique(user_id, feed_url)
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid references auth.users(id) on delete cascade not null,
+  feed_url       text not null,
+  title          text default '',
+  type           text default 'feed',
+  publication_id uuid references publications(id) on delete cascade, -- NULL = Default publication
+  created_at     timestamptz default now()
 );
+
+-- ── MIGRATION: per-publication sources ────────────────────────────────────────
+-- Run these if your `sources` table predates the publication_id column.
+-- Safe to run repeatedly.
+alter table sources add column if not exists publication_id uuid
+  references publications(id) on delete cascade;
+-- Old constraint blocked the same feed from living in two publications — drop it.
+alter table sources drop constraint if exists sources_user_id_feed_url_key;
+-- Allow the same feed in different publications, but not duplicated within one.
+create unique index if not exists sources_user_feed_pub_key
+  on sources (user_id, feed_url, publication_id);
 
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 create or replace function set_updated_at()

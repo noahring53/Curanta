@@ -4801,22 +4801,38 @@ function resetNewsletter() {
 async function saveSourceToDB(source) {
   if (!sb || !state.user) return;
   const pubId = state.currentPublicationId || null;
-  // Try saving with publication_id; fall back to without if column doesn't exist yet
-  const payload = { user_id: state.user.id, feed_url: source.feedUrl, title: source.title, type: source.type };
-  const { data, error } = await sb.from('sources').upsert(
-    { ...payload, publication_id: pubId },
-    { onConflict: 'user_id,feed_url,publication_id' }
-  ).select('id').single();
-  if (error) {
-    // Column likely doesn't exist — fall back to basic upsert without publication_id
+  const base = { user_id: state.user.id, feed_url: source.feedUrl, title: source.title, type: source.type };
+
+  // Look for an existing row scoped to THIS publication (NULL = Default).
+  // Using select-then-insert/update avoids depending on a composite unique
+  // constraint existing in the DB — only the publication_id column is required.
+  let findQ = sb.from('sources').select('id')
+    .eq('user_id', state.user.id).eq('feed_url', source.feedUrl);
+  findQ = pubId ? findQ.eq('publication_id', pubId) : findQ.is('publication_id', null);
+  const { data: existing, error: findErr } = await findQ.maybeSingle();
+
+  if (findErr) {
+    // publication_id column likely doesn't exist yet — degrade to unscoped upsert.
     const { data: fallback, error: fallbackErr } = await sb.from('sources').upsert(
-      payload, { onConflict: 'user_id,feed_url' }
+      base, { onConflict: 'user_id,feed_url' }
     ).select('id').single();
     if (fallbackErr) { console.error('Source save error:', fallbackErr); return; }
     if (fallback?.id) source.id = fallback.id;
     return;
   }
-  if (data?.id) source.id = data.id;
+
+  if (existing?.id) {
+    // Same feed already in this publication — update metadata, keep the row.
+    source.id = existing.id;
+    await sb.from('sources').update({ title: source.title, type: source.type }).eq('id', existing.id);
+    return;
+  }
+
+  // New source for this publication.
+  const { data: inserted, error: insErr } = await sb.from('sources')
+    .insert({ ...base, publication_id: pubId }).select('id').single();
+  if (insErr) { console.error('Source save error:', insErr); return; }
+  if (inserted?.id) source.id = inserted.id;
 }
 
 async function deleteSourceFromDB(sourceId) {
