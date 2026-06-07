@@ -1941,9 +1941,20 @@ function renderSettingsPage() {
     <div class="app-topbar">
       <div>
         <div class="page-title">Settings</div>
-        <div class="page-sub">Global defaults applied to every newsletter you create.</div>
+        <div class="page-sub">${canUsePubs()
+          ? 'Brand voice, audience, and section defaults below are saved <strong>per publication</strong>.'
+          : 'Global defaults applied to every newsletter you create.'}</div>
       </div>
     </div>
+
+    ${canUsePubs() ? `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;padding:12px 16px;border:1px solid var(--border-md);border-radius:var(--r-md);background:var(--bg-3)">
+      <div style="font-size:13px;color:var(--text-2)">
+        Editing settings for <span style="color:var(--accent);font-weight:700">📰 ${escHtml(currentPublicationName())}</span>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">Brand voice, audience avatar, tone &amp; section descriptions here apply only to this publication.</div>
+      </div>
+      <button class="btn btn-outline btn-sm" data-action="navigate" data-view="publications">Switch publication →</button>
+    </div>` : ''}
 
     <div class="settings-tabs">
       <button class="settings-tab ${tab === 'content' ? 'active' : ''}" data-action="settings-tab" data-tab="content">Content</button>
@@ -2016,8 +2027,8 @@ function renderSettingsPage() {
         const userSections = getUserSections();
         const hasBuilderSections = state.newsletter.sectionOrder?.length > 0;
         return `<div class="settings-section">
-        <div class="settings-section-title">Section Defaults</div>
-        <div class="settings-section-sub">Default AI instructions for each of your newsletter's sections — pre-filled on every new newsletter so you never start from scratch.</div>
+        <div class="settings-section-title">Section Defaults${canUsePubs() ? ` <span style="font-size:11px;font-weight:600;color:var(--accent);background:var(--bg-3);padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px">📰 ${escHtml(currentPublicationName())}</span>` : ''}</div>
+        <div class="settings-section-sub">Describe each section's AI instructions — pre-filled on every new newsletter so you never start from scratch.${canUsePubs() ? ' These section descriptions are unique to <strong>' + escHtml(currentPublicationName()) + '</strong>; switch publications to give another newsletter its own.' : ''}</div>
         ${userSections.length === 0 ? `
         <div style="padding:28px 24px;border:1px dashed var(--border-md);border-radius:var(--r-md);margin-top:16px;text-align:center">
           <div style="font-size:28px;margin-bottom:10px">📋</div>
