@@ -912,12 +912,12 @@ Rules:
 - No emojis unless the newsletter's voice explicitly uses them
 - Avoid colons — they read as corporate
 
-Generate 3 options. Number them. No explanations.`,
-      user: `Write 3 subject lines for this newsletter issue.\n\nNewsletter title: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\n\nToday's Briefing:\n${content.topStoriesContent.slice(0, 800)}` : ''}\n\nContent summary:\n${content.summary || articleContext || customPrompt}`,
+Generate 3 options. Number them. No explanations.${customPrompt ? `\n\nThe editor has given specific instructions for these subject lines — follow them above all other rules:\n${customPrompt}` : ''}`,
+      user: `Write 3 subject lines for this newsletter issue.${customPrompt ? `\n\nEditor's instructions (follow these): ${customPrompt}` : ''}\n\nNewsletter title: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\n\nToday's Briefing:\n${content.topStoriesContent.slice(0, 800)}` : ''}\n\nContent summary:\n${content.summary || articleContext || ''}`,
     },
     'preview-text': {
-      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Be specific — pull the sharpest detail or stat from the content. Drive the open. No emojis.`,
-      user: `Write preview text for this newsletter issue.\nNewsletter: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\nBriefing highlights:\n${content.topStoriesContent.slice(0, 600)}` : ''}\nContent:\n${content.summary || content.text?.slice(0, 400) || customPrompt}`,
+      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Be specific — pull the sharpest detail or stat from the content. Drive the open. No emojis.${customPrompt ? `\n\nThe editor has given specific instructions — follow them above all other rules:\n${customPrompt}` : ''}`,
+      user: `Write preview text for this newsletter issue.${customPrompt ? `\nEditor's instructions (follow these): ${customPrompt}` : ''}\nNewsletter: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\nBriefing highlights:\n${content.topStoriesContent.slice(0, 600)}` : ''}\nContent:\n${content.summary || content.text?.slice(0, 400) || ''}`,
     },
     rewrite: {
       system: `${toneDesc}${voiceNote}${audienceNote}

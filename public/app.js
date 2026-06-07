@@ -47,6 +47,7 @@ const state = {
   aiHistory: [],
   aiResult: null,
   subjectSourceSection: 'leadStory', // which section drives subject/preview generation ('' = whole issue)
+  subjectPrompt: '', // optional custom instructions for subject/preview generation
   sourcesPubScoped: null, // null = unknown, true = DB has publication_id column, false = use localStorage buckets
   teamComments: [],
   approvalStatus: 'draft', // 'draft' | 'review' | 'approved'
@@ -3487,6 +3488,10 @@ function renderAIPanel() {
       return `<option value="${id}" ${state.subjectSourceSection === id ? 'selected' : ''}>${escHtml(meta.name)}</option>`;
     }).join('')}
   </select>
+  <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:4px">Custom instructions (optional):</label>
+  <textarea class="input input-sm" oninput="state.subjectPrompt=this.value" rows="2"
+    placeholder="e.g. Lead with a number, no questions, keep it under 6 words…"
+    style="width:100%;box-sizing:border-box;resize:vertical;font-size:12px;margin-bottom:6px">${escHtml(state.subjectPrompt || '')}</textarea>
   <button class="ai-action-btn" data-action="generate-subjects" ${state.aiLoading ? 'disabled' : ''}>
     ${state.aiLoading ? '<div class="spinner"></div>' : '<span class="ai-action-icon">✉</span>'} Generate subject lines
   </button>
@@ -3930,7 +3935,7 @@ async function generateSubjectLines() {
   }
   state.aiLoading = true; refreshAIPanel();
   try {
-    state.aiResult = await callAI('subject-line', content);
+    state.aiResult = await callAI('subject-line', content, { prompt: state.subjectPrompt || '' });
     addToHistory('subject-line', state.aiResult);
     // Parse numbered list into individual subject lines and prepend to history
     const parsed = state.aiResult
@@ -3954,7 +3959,7 @@ async function generatePreviewText() {
   }
   state.aiLoading = true; refreshAIPanel();
   try {
-    state.aiResult = await callAI('preview-text', content);
+    state.aiResult = await callAI('preview-text', content, { prompt: state.subjectPrompt || '' });
     addToHistory('preview-text', state.aiResult);
   } catch (e) { toast(e.message, 'error'); }
   state.aiLoading = false; refreshAIPanel();
