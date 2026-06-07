@@ -1533,8 +1533,8 @@ function renderDashboard() {
                   ${nl.scheduledFor ? `<div class="newsletter-stat">Sends ${new Date(nl.scheduledFor).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
                 </div>
                 <div class="newsletter-card-actions">
-                  <button class="nl-action-btn" data-action="duplicate-newsletter" data-id="${nl.id}" title="Duplicate" onclick="event.stopPropagation()">⊕ Copy</button>
-                  <button class="nl-action-btn danger" data-action="delete-newsletter" data-id="${nl.id}" title="Delete" onclick="event.stopPropagation()">× Delete</button>
+                  <button class="nl-action-btn" data-action="duplicate-newsletter" data-id="${nl.id}" title="Duplicate">⊕ Copy</button>
+                  <button class="nl-action-btn danger" data-action="delete-newsletter" data-id="${nl.id}" title="Delete">× Delete</button>
                 </div>
               </div>
             </div>
