@@ -47,6 +47,7 @@ const state = {
   aiHistory: [],
   aiResult: null,
   subjectSourceSection: 'leadStory', // which section drives subject/preview generation ('' = whole issue)
+  sourcesPubScoped: null, // null = unknown, true = DB has publication_id column, false = use localStorage buckets
   teamComments: [],
   approvalStatus: 'draft', // 'draft' | 'review' | 'approved'
   versions: [],
@@ -95,18 +96,33 @@ let cfg = { supabaseUrl: '', supabaseAnonKey: '', hasAI: false };
 let sb = null;
 
 // ── LOCAL STORAGE HELPERS ─────────────────────────────────────────────────────
-const LS_SOURCES_KEY = 'lwai_sources';
+const LS_SOURCES_KEY = 'lwai_sources'; // legacy global key (pre per-publication)
+
+// Sources are bucketed per publication so they never bleed across newsletters,
+// even when the DB lacks the publication_id column. Default = 'default'.
+function sourcesLSKey() {
+  return `lwai_sources_${state.currentPublicationId || 'default'}`;
+}
+
+function saveSourcesListLocally(list) {
+  try {
+    const slim = (list || []).map(s => ({ feedUrl: s.feedUrl, title: s.title, type: s.type }));
+    localStorage.setItem(sourcesLSKey(), JSON.stringify(slim));
+  } catch (e) { /* storage full or unavailable */ }
+}
 
 function saveSourcesLocally() {
-  try {
-    const slim = state.sources.map(s => ({ feedUrl: s.feedUrl, title: s.title, type: s.type }));
-    localStorage.setItem(LS_SOURCES_KEY, JSON.stringify(slim));
-  } catch (e) { /* storage full or unavailable */ }
+  saveSourcesListLocally(state.sources);
 }
 
 function loadSourcesLocally() {
   try {
-    const raw = localStorage.getItem(LS_SOURCES_KEY);
+    let raw = localStorage.getItem(sourcesLSKey());
+    // One-time migration: fold the old single global bucket into Default's bucket.
+    if (!raw && !state.currentPublicationId) {
+      const legacy = localStorage.getItem(LS_SOURCES_KEY);
+      if (legacy) { localStorage.setItem(sourcesLSKey(), legacy); raw = legacy; }
+    }
     if (!raw) return [];
     return JSON.parse(raw); // returns [{feedUrl, title, type}, ...]
   } catch (e) { return []; }
@@ -1575,10 +1591,21 @@ function renderSourcesPage() {
     <div class="app-topbar">
       <div>
         <div class="page-title">Sources</div>
-        <div class="page-sub">RSS feeds and URLs you pull articles from. Shared across all newsletters.</div>
+        <div class="page-sub">${canUsePubs()
+          ? `RSS feeds for <strong style="color:var(--text-2)">📰 ${escHtml(currentPublicationName())}</strong> — each publication keeps its own.`
+          : 'RSS feeds and URLs you pull articles from.'}</div>
       </div>
     </div>
     <div class="page-body">
+      ${canUsePubs() && state.sourcesPubScoped === false ? `
+      <div class="card" style="margin-bottom:16px;padding:12px 16px;border-left:3px solid var(--amber, #f59e0b);background:var(--bg-3)">
+        <div style="font-size:13px;color:var(--text-2);line-height:1.5">
+          ⚠️ Sources are separated per publication on <strong>this browser</strong>.
+          For separation that syncs across devices, run the one-time
+          <code style="font-size:11px">publication_id</code> migration in Supabase
+          (see <code style="font-size:11px">supabase-schema.sql</code>).
+        </div>
+      </div>` : ''}
       <div class="card" style="margin-bottom:20px;padding:16px 20px">
         <form id="source-form" style="display:flex;gap:10px;align-items:center">
           <input id="source-url-input" class="input" type="url" placeholder="Paste RSS feed URL or article URL…" style="flex:1">
@@ -4837,30 +4864,64 @@ async function saveSourceToDB(source) {
 
 async function deleteSourceFromDB(sourceId) {
   if (!sb || !state.user) return;
+  // When the DB can't scope by publication, the same feed_url is one shared row
+  // across publications — deleting it would remove it everywhere. In that mode we
+  // only drop local membership (handled by the caller via saveSourcesLocally) and
+  // leave the row intact so other publications keep it.
+  if (state.sourcesPubScoped === false) return;
   const { error } = await sb.from('sources').delete().eq('id', sourceId).eq('user_id', state.user.id);
   if (error) console.error('Source delete error:', error);
+}
+
+// Detect once whether the sources table has the publication_id column.
+async function ensureSourcesCapability() {
+  if (state.sourcesPubScoped !== null) return state.sourcesPubScoped;
+  if (!sb || !state.user) { state.sourcesPubScoped = false; return false; }
+  const { error } = await sb.from('sources')
+    .select('id').eq('user_id', state.user.id).is('publication_id', null).limit(1);
+  state.sourcesPubScoped = !error; // error => column missing
+  return state.sourcesPubScoped;
+}
+
+function mapSourceRows(rows) {
+  return (rows || []).map(s => ({
+    id: s.id, feedUrl: s.feed_url, title: s.title || s.feed_url,
+    type: s.type || 'feed', articles: [], collapsed: false,
+  }));
 }
 
 async function loadSourcesFromDB() {
   if (!sb || !state.user) return [];
   const pubId = state.currentPublicationId || null;
-  // Try scoped query first; fall back to unscoped if publication_id column doesn't exist yet
-  let query = sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
-  const scopedQuery = pubId ? query.eq('publication_id', pubId) : query.is('publication_id', null);
-  const { data, error } = await scopedQuery;
-  if (error) {
-    // Column likely doesn't exist yet — fall back to loading all user's sources
-    const { data: fallback, error: fallbackErr } = await sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
-    if (fallbackErr) { console.error('Load sources error:', fallbackErr); return []; }
-    return (fallback || []).map(s => ({
-      id: s.id, feedUrl: s.feed_url, title: s.title || s.feed_url,
-      type: s.type || 'feed', articles: [], collapsed: false,
-    }));
+  const scoped = await ensureSourcesCapability();
+
+  if (scoped) {
+    // Proper DB-level isolation by publication_id.
+    let query = sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
+    query = pubId ? query.eq('publication_id', pubId) : query.is('publication_id', null);
+    const { data, error } = await query;
+    if (error) { console.error('Load sources error:', error); return []; }
+    const rows = mapSourceRows(data);
+    saveSourcesListLocally(rows); // keep the per-publication local cache in sync
+    return rows;
   }
-  return (data || []).map(s => ({
-    id: s.id, feedUrl: s.feed_url, title: s.title || s.feed_url,
-    type: s.type || 'feed', articles: [], collapsed: false,
-  }));
+
+  // Fallback (no publication_id column): isolate per publication using the
+  // publication-keyed localStorage membership list so sources never bleed.
+  const { data, error } = await sb.from('sources').select('*').eq('user_id', state.user.id).order('created_at');
+  if (error) { console.error('Load sources error:', error); return []; }
+  const allRows = mapSourceRows(data);
+  const local = loadSourcesLocally();
+
+  if (!local.length && !pubId) {
+    // First run on Default before any buckets exist — adopt all pre-existing
+    // sources so nothing is lost; they become Default's set.
+    saveSourcesListLocally(allRows);
+    return allRows;
+  }
+
+  const allowed = new Set(local.map(s => s.feedUrl));
+  return allRows.filter(r => allowed.has(r.feedUrl));
 }
 
 function autoFetchSources() {
