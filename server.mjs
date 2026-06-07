@@ -901,6 +901,29 @@ Rules:
 - End every blurb with a → link.`,
       user: `Write a Quick Hit blurb.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
     },
+    'quick-hits': (() => {
+      const items = contents.length ? contents : [content];
+      const articleList = items.map((a, i) =>
+        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 500)}`
+      ).join('\n\n');
+      return {
+        system: `${toneDesc}${voiceNote}${audienceNote}
+
+You write a newsletter "Quick Hits" section: a scannable bulleted list of short, punchy news items. You are given several articles — each is a DIFFERENT story. Produce exactly ONE line per article, in the same order.
+
+Format for EACH line:
+- Begin with "• " then a single relevant emoji, then the item.
+- ONE sentence only. Lead with the hardest number, stat, dollar figure, or sharpest specific fact. No second sentence.
+- No bold titles. No inline links. Keep each line tight — under ~16 words.
+- Pick an emoji that fits the topic (🚀💰📈📉🏛️⚖️🛡️🗳️🤖🏥🔬🌍📅💣📺🏆🏠).
+
+After all the bullet lines, add ONE final line that begins exactly with "Sources: " and lists every article's outlet as a markdown link, in the same order, separated by ", ". Use the REAL URL for each. Use a SHORT outlet name as the anchor text (e.g. CNBC, Reuters, History, RCP) — derive it from the source name or domain. Example:
+Sources: [CNBC](https://cnbc.com/...), [History](https://history.com/...), [Breitbart](https://breitbart.com/...), [RCP](https://realclearpolitics.com/...)
+
+Output ONLY the bullet lines followed by the single Sources line — no intro, no header, no commentary.${customPrompt ? `\n\nEditor's instructions — follow these above all: ${customPrompt}` : ''}`,
+        user: `Write the Quick Hits list for these ${items.length} articles${customPrompt ? `. ${customPrompt}` : ''}:\n\n${articleList}`,
+      };
+    })(),
     'subject-line': {
       system: `You are a newsletter growth expert who has studied thousands of high-performing subject lines. You write subject lines that get opened.
 

@@ -2542,9 +2542,26 @@ function formatTopStories(text) {
     .join('');
 }
 
-// ── LEAD STORY (multi-source synthesis) ───────────────────────────────────────
+// ── MULTI-SOURCE SYNTHESIS SECTIONS (lead story + quick hits) ──────────────────
 function hostnameOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+// Which section types stage multiple articles then generate one combined output.
+function isSynthType(type) { return type === 'lead' || type === 'hits'; }
+
+function synthConfig(sectionId) {
+  const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
+  if (type === 'hits') {
+    return { type, action: 'quick-hits', noun: 'quick hits', label: 'Quick hits',
+      promptPlaceholder: 'Style instructions for the list…',
+      sourcesLabel: 'staged — add more from the sidebar, then Generate',
+      awaiting: n => `turn ${n} article${n === 1 ? '' : 's'} into a bulleted list with a sources footer` };
+  }
+  return { type, action: 'lead-story', noun: 'lead story', label: 'Lead story',
+    promptPlaceholder: 'Angle / instructions for this story…',
+    sourcesLabel: 'on this story — add more from the sidebar, then Generate',
+    awaiting: n => `synthesize ${n} report${n === 1 ? '' : 's'} into one lead story with source links` };
 }
 
 function toLeadSource(a) {
@@ -2558,17 +2575,19 @@ function toLeadSource(a) {
   };
 }
 
-// Returns the single synthesis entry for a lead section. Migrates any legacy
+// Returns the single synthesis entry for a section. Migrates any legacy
 // per-article entries into one entry's _sources list. Pass create=true to make one.
 function getLeadEntry(sectionId, create = false) {
   const arr = state.newsletter.sections[sectionId] || (state.newsletter.sections[sectionId] = []);
   let entry = arr.find(a => a._lead);
   if (!entry && arr.length) {
     const legacy = arr.splice(0, arr.length);
+    const joiner = state.newsletter.sectionMeta[sectionId]?.type === 'hits' ? '\n' : '\n\n';
+    const merged = legacy.filter(l => l.content).map(l => l.content).join(joiner);
     entry = {
       id: uid(), _lead: true,
       _sources: legacy.map(toLeadSource),
-      content: legacy.find(l => l.content)?.content || null,
+      content: merged || null,
     };
     arr.push(entry);
   }
@@ -2577,14 +2596,15 @@ function getLeadEntry(sectionId, create = false) {
 }
 
 async function generateLeadStory(sectionId) {
+  const { action, noun } = synthConfig(sectionId);
   const entry = getLeadEntry(sectionId, true);
   const sources = entry._sources || [];
-  if (!sources.length) { toast('Add at least one source article to the lead story first', 'warn'); return; }
+  if (!sources.length) { toast('Add at least one article first', 'warn'); return; }
   entry.loading = true; entry.editing = false;
   refreshSectionContent(sectionId);
   try {
-    entry.content = await callAI('lead-story', sources[0], { prompt: effectivePrompt(sectionId), contents: sources });
-    toast(sources.length > 1 ? `Lead story synthesized from ${sources.length} sources` : 'Lead story generated', 'success');
+    entry.content = await callAI(action, sources[0], { prompt: effectivePrompt(sectionId), contents: sources });
+    toast(`${noun.charAt(0).toUpperCase() + noun.slice(1)} generated from ${sources.length} article${sources.length === 1 ? '' : 's'}`, 'success');
   } catch (e) {
     if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
   }
@@ -2606,6 +2626,7 @@ function removeLeadSource(sectionId, articleId) {
 }
 
 function renderLeadSection(sectionId, label) {
+  const cfg = synthConfig(sectionId);
   const prompt = state.newsletter.prompts[sectionId] || '';
   const canRemove = state.newsletter.sectionOrder.length > 1;
   const promptOpen = !!(state._expandedPrompts?.[sectionId]);
@@ -2622,7 +2643,7 @@ function renderLeadSection(sectionId, label) {
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
     <div class="section-prompt-wrap">
-      ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Angle / instructions for this story…">` : ''}
+      ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="${cfg.promptPlaceholder}">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}" ${n === 0 ? 'disabled' : ''}>✦ Generate${n > 1 ? ` (${n})` : ''}</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
@@ -2637,6 +2658,7 @@ function renderLeadSection(sectionId, label) {
 }
 
 function renderLeadSourcesBlock(sectionId, sources) {
+  const cfg = synthConfig(sectionId);
   const chips = sources.map(s => `
     <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px">
       <span style="font-size:11px;font-weight:700;color:var(--accent);white-space:nowrap">${escHtml(s.source || 'Source')}</span>
@@ -2647,23 +2669,24 @@ function renderLeadSourcesBlock(sectionId, sources) {
   return `
     <div style="margin-bottom:12px">
       <div style="font-size:11px;font-weight:600;color:var(--text-3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">
-        ${sources.length} source${sources.length === 1 ? '' : 's'} on this story — add more from the sidebar, then Generate
+        ${sources.length} ${cfg.type === 'hits' ? 'article' : 'source'}${sources.length === 1 ? '' : 's'} ${cfg.sourcesLabel}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px">${chips}</div>
     </div>`;
 }
 
 function renderLeadBody(sectionId) {
+  const cfg = synthConfig(sectionId);
   const entry = getLeadEntry(sectionId);
   const sources = entry?._sources || [];
-  if (!sources.length && !entry?.content) return renderDropPlaceholder('leadStory');
+  if (!sources.length && !entry?.content) return renderDropPlaceholder(sectionId);
 
   const sourcesBlock = renderLeadSourcesBlock(sectionId, sources);
 
   if (entry?.loading) {
     return sourcesBlock + `<div class="story-block loading" id="story-${entry.id}">
-      <div class="story-block-header"><span class="story-source">Lead story</span>
-        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> Synthesizing…</span>
+      <div class="story-block-header"><span class="story-source">${cfg.label}</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> Generating…</span>
       </div>
       <div class="story-skeleton">
         <div class="skeleton-line h-10 w-full"></div><div class="skeleton-line h-10 w-80"></div>
@@ -2676,7 +2699,7 @@ function renderLeadBody(sectionId) {
     const content = entry.content || '';
     const rows = Math.max(6, (content.match(/\n/g) || []).length + 3);
     return sourcesBlock + `<div class="story-block editing" id="story-${entry.id}">
-      <div class="story-block-header"><span class="story-source">Lead story</span>
+      <div class="story-block-header"><span class="story-source">${cfg.label}</span>
         <span style="margin-left:auto;font-size:10px;color:var(--accent);font-weight:600">EDITING</span></div>
       <textarea class="story-edit-textarea" data-article-id="${entry.id}" data-section="${sectionId}" rows="${rows}"
         style="width:100%;box-sizing:border-box;padding:12px;font-size:13px;line-height:1.7;font-family:var(--font-mono);border:none;background:var(--bg-1);color:var(--text-1);resize:vertical;outline:none;border-bottom:1px solid var(--border)">${escHtml(content)}</textarea>
@@ -2688,13 +2711,13 @@ function renderLeadBody(sectionId) {
 
   if (!entry?.content) {
     return sourcesBlock + `<div style="padding:16px;text-align:center;border:1px dashed var(--border);border-radius:8px;color:var(--text-3);font-size:13px;line-height:1.6">
-      Ready — click <strong style="color:var(--text-2)">✦ Generate</strong> to synthesize ${sources.length} report${sources.length === 1 ? '' : 's'} into one lead story with source links.
+      Ready — click <strong style="color:var(--text-2)">✦ Generate</strong> to ${cfg.awaiting(sources.length)}.
     </div>`;
   }
 
   return sourcesBlock + `<div class="story-block" id="story-${entry.id}">
     <div class="story-block-header">
-      <span class="story-source">Lead story</span>
+      <span class="story-source">${cfg.label}</span>
       <button class="btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" data-action="edit-story" data-article-id="${entry.id}" data-section="${sectionId}">✎ Edit</button>
     </div>
     <div class="story-content">${formatContent(entry.content)}</div>
@@ -2706,7 +2729,7 @@ function renderLeadBody(sectionId) {
 }
 
 function renderSection(sectionId, label, type = 'hits') {
-  if (type === 'lead') return renderLeadSection(sectionId, label);
+  if (isSynthType(type)) return renderLeadSection(sectionId, label);
   const articles = state.newsletter.sections[sectionId] || [];
   const prompt = state.newsletter.prompts[sectionId] || '';
   const isGrid = type === 'hits' || type === 'generic';
@@ -2946,11 +2969,11 @@ function renderDropPlaceholder(sectionId) {
     quickHits: {
       icon: '⚡',
       label: 'No quick hits yet',
-      hint: 'Add 2–5 articles for your digest section.',
+      hint: 'Add a few articles — each becomes one emoji bullet, with a shared sources footer.',
       steps: [
-        'Drag multiple article cards into this section',
-        'Click Apply — AI writes a punchy one-liner per story',
-        'Reorder them by dragging within the section',
+        'Drag in several articles (different stories)',
+        'They stage as a list — nothing generates yet',
+        'Click ✦ Generate — one emoji line per story + a Sources: footer',
       ],
     },
     cta: {
@@ -3056,7 +3079,7 @@ function refreshSectionContent(sectionId) {
   const container = document.getElementById(`section-content-${sectionId}`);
   if (!container) return;
   const sectionType = state.newsletter.sectionMeta[sectionId]?.type || 'hits';
-  if (sectionType === 'lead') {
+  if (isSynthType(sectionType)) {
     container.className = 'section-content';
     container.innerHTML = renderLeadBody(sectionId);
     setupDropZones();
@@ -3107,12 +3130,12 @@ async function addToSection(articleId, sectionId) {
     scheduleSave();
     return;
   }
-  if (sectionType === 'lead') {
-    // Lead stories stage multiple sources about the same event, then synthesize
-    // into one story on demand — no auto-generation per article.
+  if (isSynthType(sectionType)) {
+    // Lead stories & quick hits stage multiple articles, then generate one
+    // combined output on demand — no auto-generation per article.
     const entry = getLeadEntry(sectionId, true);
     if (entry._sources.some(s => (article.url && s.url === article.url) || s.id === articleId)) {
-      toast('Already added to lead story', 'warn'); return;
+      toast('Already added to this section', 'warn'); return;
     }
     entry._sources.push(toLeadSource(article));
     refreshSectionContent(sectionId);
