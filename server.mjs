@@ -825,8 +825,46 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     .join('\n');
 
   const prompts = {
-    'lead-story': {
-      system: `${toneDesc}${voiceNote}${audienceNote}
+    'lead-story': (() => {
+      const items = contents.length ? contents : [content];
+      const multi = items.length > 1;
+      const sourceList = items.map((a, i) =>
+        `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 4000)}`
+      ).join('\n\n---\n\n');
+
+      const hyperlinkRules = `
+HYPERLINKS — required, this is important:
+- Attribute specific facts inline using markdown links to the outlet that reported them, e.g. "...the deal closed at $2.4B [per Bloomberg](URL)...". Use the REAL URLs given above — never invent or use "#".
+- Use ${multi ? '2–4' : '1–2'} inline hyperlinks woven naturally into the prose. Anchor text should be the outlet name or a short natural phrase, never a bare URL.${multi ? '\n- Spread the inline links across DIFFERENT sources where the facts come from.' : ''}
+- End with a separate final line: "Sources: " followed by every outlet as markdown links separated by " · ", e.g. Sources: [Reuters](URL) · [Bloomberg](URL).`;
+
+      if (multi) {
+        return {
+          system: `${toneDesc}${voiceNote}${audienceNote}
+
+You write ONE newsletter lead story that SYNTHESIZES several reports about the SAME event into a single authoritative piece — 320–420 words, 5–6 paragraphs.
+
+You are given multiple articles from different outlets covering the same story. Merge them into one cohesive narrative: corroborate facts that appear across sources, fold in unique details each outlet adds, and note where accounts meaningfully differ. Do NOT write a separate summary per outlet and do NOT repeat the same fact twice.
+
+Structure:
+- Opening (2 sentences max): the sharpest specific insight or number — not a headline restatement.
+- The details: the key facts and timeline, drawn from across the sources.
+- Context: one or two sentences on why this moment is different from before.
+- The angle: your take — what's being underplayed or misframed. A specific, defensible claim.
+- Why it matters: concrete downstream effects for readers — who, and how.
+- Closing line: one punchy prediction or the thing to watch next.
+${hyperlinkRules}
+
+Writing rules:
+- Specific beats vague. Numbers, names, and dates beat "many" and "some."
+- Sentences under 20 words hit harder. Active voice only. No hedging, no "it is worth noting," no "in a sign of."
+- The brand voice profile — if set — overrides everything else.`,
+          user: `Write ONE synthesized lead story from these ${items.length} reports about the same event.${customPrompt ? `\nEditor's instructions: ${customPrompt}` : ''}\n\n${sourceList}`,
+        };
+      }
+
+      return {
+        system: `${toneDesc}${voiceNote}${audienceNote}
 
 You write newsletter lead stories — 300–380 words, 5–6 paragraphs.
 
@@ -837,7 +875,7 @@ Structure:
 - **The angle:** Your take. What's being underplayed or misframed. Make a specific, defensible claim.
 - **Why it matters:** Concrete downstream effects for readers. Be specific about who and how.
 - **Closing line:** One punchy sentence — a prediction, a question, or the thing to watch next.
-- End with: [Source: NAME](URL)
+${hyperlinkRules}
 
 Writing rules:
 - Specific beats vague. Numbers, names, and dates beat "many" and "some."
@@ -845,8 +883,9 @@ Writing rules:
 - No passive voice. No "it is worth noting." No "in a sign of."
 - Don't hedge. If you have a take, state it.
 - The brand voice profile — if set — overrides everything else. Write in that voice above all.`,
-      user: `Write a lead story for this article.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
-    },
+        user: `Write a lead story for this article.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
+      };
+    })(),
     'quick-hit': {
       system: `${toneDesc}${voiceNote}${audienceNote}
 

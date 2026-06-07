@@ -337,6 +337,8 @@ function handleClick(e) {
     case 'add-to-section':  addToSection(d.articleId, d.section || 'leadStory'); break;
     case 'remove-from-section': removeFromSection(d.articleId, d.section); break;
     case 'apply-prompt':      applyPrompt(d.section); break;
+    case 'generate-lead-story': generateLeadStory(d.section); break;
+    case 'remove-lead-source':  removeLeadSource(d.section, d.articleId); break;
     case 'generate-top-stories': generateTopStories(); break;
     case 'briefing-prompt-from-examples': showBriefingPromptModal(); break;
     case 'generate-briefing-prompt': generateBriefingPrompt(); break;
@@ -2528,7 +2530,171 @@ function formatTopStories(text) {
     .join('');
 }
 
+// ── LEAD STORY (multi-source synthesis) ───────────────────────────────────────
+function hostnameOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+function toLeadSource(a) {
+  return {
+    id: a.id || uid(),
+    title: a.title || '',
+    source: a.source || hostnameOf(a.url) || '',
+    url: a.url || '',
+    summary: a.summary || '',
+    text: a.text ? a.text.slice(0, 6000) : '',
+  };
+}
+
+// Returns the single synthesis entry for a lead section. Migrates any legacy
+// per-article entries into one entry's _sources list. Pass create=true to make one.
+function getLeadEntry(sectionId, create = false) {
+  const arr = state.newsletter.sections[sectionId] || (state.newsletter.sections[sectionId] = []);
+  let entry = arr.find(a => a._lead);
+  if (!entry && arr.length) {
+    const legacy = arr.splice(0, arr.length);
+    entry = {
+      id: uid(), _lead: true,
+      _sources: legacy.map(toLeadSource),
+      content: legacy.find(l => l.content)?.content || null,
+    };
+    arr.push(entry);
+  }
+  if (!entry && create) { entry = { id: uid(), _lead: true, _sources: [], content: null }; arr.push(entry); }
+  return entry;
+}
+
+async function generateLeadStory(sectionId) {
+  const entry = getLeadEntry(sectionId, true);
+  const sources = entry._sources || [];
+  if (!sources.length) { toast('Add at least one source article to the lead story first', 'warn'); return; }
+  entry.loading = true; entry.editing = false;
+  refreshSectionContent(sectionId);
+  try {
+    entry.content = await callAI('lead-story', sources[0], { prompt: effectivePrompt(sectionId), contents: sources });
+    toast(sources.length > 1 ? `Lead story synthesized from ${sources.length} sources` : 'Lead story generated', 'success');
+  } catch (e) {
+    if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
+  }
+  entry.loading = false;
+  refreshSectionContent(sectionId);
+  scheduleSave();
+}
+
+function removeLeadSource(sectionId, articleId) {
+  const entry = getLeadEntry(sectionId);
+  if (!entry) return;
+  entry._sources = entry._sources.filter(s => s.id !== articleId);
+  if (!entry._sources.length && !entry.content) {
+    state.newsletter.sections[sectionId] = state.newsletter.sections[sectionId].filter(a => a !== entry);
+  }
+  refreshSectionContent(sectionId);
+  refreshSourceSidebar();
+  scheduleSave();
+}
+
+function renderLeadSection(sectionId, label) {
+  const prompt = state.newsletter.prompts[sectionId] || '';
+  const canRemove = state.newsletter.sectionOrder.length > 1;
+  const promptOpen = !!(state._expandedPrompts?.[sectionId]);
+  const hasCustomPrompt = !!prompt;
+  const entry = getLeadEntry(sectionId);
+  const n = entry?._sources?.length || 0;
+  return `
+<div class="editor-section" id="section-${sectionId}" draggable="true"
+  ondragstart="sectionDragStart(event,'${sectionId}')"
+  ondragend="sectionDragEnd(event)"
+  ondragover="sectionDragOver(event,'${sectionId}')"
+  ondrop="sectionDrop(event,'${sectionId}')">
+  <div class="section-header">
+    <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
+    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
+    <div class="section-prompt-wrap">
+      ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Angle / instructions for this story…">` : ''}
+      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}" ${n === 0 ? 'disabled' : ''}>✦ Generate${n > 1 ? ` (${n})` : ''}</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
+    </div>
+  </div>
+  <div class="section-drop-zone" data-section="${sectionId}">
+    <div class="section-content" id="section-content-${sectionId}">
+      ${renderLeadBody(sectionId)}
+    </div>
+  </div>
+</div>`;
+}
+
+function renderLeadSourcesBlock(sectionId, sources) {
+  const chips = sources.map(s => `
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px">
+      <span style="font-size:11px;font-weight:700;color:var(--accent);white-space:nowrap">${escHtml(s.source || 'Source')}</span>
+      <span style="flex:1;min-width:0;font-size:12px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.title || '')}">${escHtml(s.title || '(untitled)')}</span>
+      ${s.url ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener" style="font-size:12px;color:var(--text-3);text-decoration:none" title="Open original">↗</a>` : ''}
+      <button class="btn-ghost btn-sm" style="font-size:13px;padding:0 6px;color:var(--red)" data-action="remove-lead-source" data-section="${sectionId}" data-article-id="${s.id}" title="Remove source">×</button>
+    </div>`).join('');
+  return `
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:600;color:var(--text-3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">
+        ${sources.length} source${sources.length === 1 ? '' : 's'} on this story — add more from the sidebar, then Generate
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">${chips}</div>
+    </div>`;
+}
+
+function renderLeadBody(sectionId) {
+  const entry = getLeadEntry(sectionId);
+  const sources = entry?._sources || [];
+  if (!sources.length && !entry?.content) return renderDropPlaceholder('leadStory');
+
+  const sourcesBlock = renderLeadSourcesBlock(sectionId, sources);
+
+  if (entry?.loading) {
+    return sourcesBlock + `<div class="story-block loading" id="story-${entry.id}">
+      <div class="story-block-header"><span class="story-source">Lead story</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> Synthesizing…</span>
+      </div>
+      <div class="story-skeleton">
+        <div class="skeleton-line h-10 w-full"></div><div class="skeleton-line h-10 w-80"></div>
+        <div class="skeleton-line h-8 w-full"></div><div class="skeleton-line h-8 w-65"></div>
+        <div class="skeleton-line h-8 w-80"></div><div class="skeleton-line h-8 w-45"></div>
+      </div></div>`;
+  }
+
+  if (entry?.editing) {
+    const content = entry.content || '';
+    const rows = Math.max(6, (content.match(/\n/g) || []).length + 3);
+    return sourcesBlock + `<div class="story-block editing" id="story-${entry.id}">
+      <div class="story-block-header"><span class="story-source">Lead story</span>
+        <span style="margin-left:auto;font-size:10px;color:var(--accent);font-weight:600">EDITING</span></div>
+      <textarea class="story-edit-textarea" data-article-id="${entry.id}" data-section="${sectionId}" rows="${rows}"
+        style="width:100%;box-sizing:border-box;padding:12px;font-size:13px;line-height:1.7;font-family:var(--font-mono);border:none;background:var(--bg-1);color:var(--text-1);resize:vertical;outline:none;border-bottom:1px solid var(--border)">${escHtml(content)}</textarea>
+      <div class="story-actions">
+        <button class="story-action-btn primary" data-action="save-story-edit" data-article-id="${entry.id}" data-section="${sectionId}">✓ Done</button>
+        <button class="story-action-btn" data-action="cancel-story-edit" data-article-id="${entry.id}" data-section="${sectionId}">✕ Cancel</button>
+      </div></div>`;
+  }
+
+  if (!entry?.content) {
+    return sourcesBlock + `<div style="padding:16px;text-align:center;border:1px dashed var(--border);border-radius:8px;color:var(--text-3);font-size:13px;line-height:1.6">
+      Ready — click <strong style="color:var(--text-2)">✦ Generate</strong> to synthesize ${sources.length} report${sources.length === 1 ? '' : 's'} into one lead story with source links.
+    </div>`;
+  }
+
+  return sourcesBlock + `<div class="story-block" id="story-${entry.id}">
+    <div class="story-block-header">
+      <span class="story-source">Lead story</span>
+      <button class="btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" data-action="edit-story" data-article-id="${entry.id}" data-section="${sectionId}">✎ Edit</button>
+    </div>
+    <div class="story-content">${formatContent(entry.content)}</div>
+    <div class="story-actions">
+      <button class="story-action-btn" data-action="generate-lead-story" data-section="${sectionId}">↺ Regenerate</button>
+      <button class="story-action-btn" data-action="edit-story" data-article-id="${entry.id}" data-section="${sectionId}">✎ Edit</button>
+    </div>
+  </div>`;
+}
+
 function renderSection(sectionId, label, type = 'hits') {
+  if (type === 'lead') return renderLeadSection(sectionId, label);
   const articles = state.newsletter.sections[sectionId] || [];
   const prompt = state.newsletter.prompts[sectionId] || '';
   const isGrid = type === 'hits' || type === 'generic';
@@ -2758,11 +2924,11 @@ function renderDropPlaceholder(sectionId) {
     leadStory: {
       icon: '📰',
       label: 'No lead story yet',
-      hint: 'One article goes here — AI writes the full story.',
+      hint: 'Add one or more articles about the same event — AI synthesizes one story with source links.',
       steps: [
-        'Add an RSS feed or paste a URL in the Sources panel',
-        'Drag an article card here (or double-click it)',
-        'Click Apply — AI writes your lead story instantly',
+        'Drag in every article covering this story (from any outlet)',
+        'They stage as sources — nothing generates yet',
+        'Click ✦ Generate — AI merges them into one story with hyperlinks',
       ],
     },
     quickHits: {
@@ -2877,8 +3043,14 @@ function formatContent(text) {
 function refreshSectionContent(sectionId) {
   const container = document.getElementById(`section-content-${sectionId}`);
   if (!container) return;
-  const articles = state.newsletter.sections[sectionId] || [];
   const sectionType = state.newsletter.sectionMeta[sectionId]?.type || 'hits';
+  if (sectionType === 'lead') {
+    container.className = 'section-content';
+    container.innerHTML = renderLeadBody(sectionId);
+    setupDropZones();
+    return;
+  }
+  const articles = state.newsletter.sections[sectionId] || [];
   const isGrid = sectionType === 'hits' || sectionType === 'generic';
   container.className = `section-content ${isGrid && articles.length > 0 ? 'quick-hits-grid' : ''}`;
   container.innerHTML = articles.length === 0
@@ -2889,7 +3061,10 @@ function refreshSectionContent(sectionId) {
 
 function getAllSectionArticleIds() {
   const ids = new Set();
-  Object.values(state.newsletter.sections).forEach(arr => arr.forEach(a => ids.add(a.id)));
+  Object.values(state.newsletter.sections).forEach(arr => arr.forEach(a => {
+    ids.add(a.id);
+    if (a._sources) a._sources.forEach(s => ids.add(s.id)); // lead-story source articles
+  }));
   return ids;
 }
 
@@ -2917,6 +3092,19 @@ async function addToSection(articleId, sectionId) {
   if (sectionType === 'briefing') {
     state.newsletter.sections[sectionId].push({ ...article });
     refreshTopStoriesSection();
+    scheduleSave();
+    return;
+  }
+  if (sectionType === 'lead') {
+    // Lead stories stage multiple sources about the same event, then synthesize
+    // into one story on demand — no auto-generation per article.
+    const entry = getLeadEntry(sectionId, true);
+    if (entry._sources.some(s => (article.url && s.url === article.url) || s.id === articleId)) {
+      toast('Already added to lead story', 'warn'); return;
+    }
+    entry._sources.push(toLeadSource(article));
+    refreshSectionContent(sectionId);
+    refreshSourceSidebar();
     scheduleSave();
     return;
   }
@@ -3809,6 +3997,7 @@ async function callAI(action, content, options = {}) {
     body: JSON.stringify({
       action,
       content,
+      contents: options.contents || [],
       tone: state.tone,
       prompt: options.prompt || '',
       brandVoice: state.brandVoice,
