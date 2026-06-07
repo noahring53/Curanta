@@ -1970,46 +1970,44 @@ function renderSettingsPage() {
       <!-- ── BRAND VOICE ── -->
       <div class="settings-section">
         <div class="settings-section-title">Brand Voice</div>
-        <div class="settings-section-sub">Paste your newsletter's homepage — Curanta reads your past issues and builds a voice profile you can edit.</div>
-        <div style="margin-top:16px;display:flex;gap:8px">
-          <input id="voice-pub-url" class="input" type="url"
-            placeholder="https://yourname.substack.com  or  https://yourpub.beehiiv.com"
-            style="flex:1" ${state.voiceUrlLoading ? 'disabled' : ''}>
-          <button class="btn btn-primary" onclick="discoverVoice()" ${state.voiceUrlLoading ? 'disabled' : ''}>
-            ${state.voiceUrlLoading ? '<span class="spinner"></span> Analyzing…' : '🎙 Analyze'}
-          </button>
-        </div>
-        <div style="margin-top:5px;font-size:11px;color:var(--text-3)">Works with Substack, Beehiiv, Ghost, WordPress — reads up to 12 past issues.</div>
+        <div class="settings-section-sub">Type or paste your brand voice below — describe your tone, sentence rhythm, vocabulary, and what to always/never do. It applies to every AI generation. No publication or URL required.</div>
 
-        ${state.voiceUrls?.length ? `
-        <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px">
-          ${state.voiceUrls.map((u, i) => `
-          <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 9px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;color:var(--green)">
-            ✓ ${escHtml(new URL(u).hostname)}
-            <button style="background:none;border:none;cursor:pointer;color:var(--green);font-size:13px;line-height:1;padding:0;opacity:0.7" data-action="remove-voice-url" data-idx="${i}">×</button>
-          </div>`).join('')}
-        </div>` : ''}
-
-        ${state.brandVoice ? `
-        <div style="margin-top:20px">
+        <div style="margin-top:16px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--green)">🎙 Voice Profile — Active</span>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-outline btn-sm" data-action="generate-brand-voice">↺ Regenerate</button>
-              <button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear</button>
-            </div>
+            <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${state.brandVoice ? 'var(--green)' : 'var(--text-3)'}">🎙 Voice Profile${state.brandVoice ? ' — Active' : ''}</span>
+            ${state.brandVoice ? `<button class="btn btn-ghost btn-sm" data-action="clear-brand-voice" style="color:var(--red)">Clear</button>` : ''}
           </div>
           <textarea id="brand-voice-edit" class="input" rows="8"
             style="width:100%;resize:vertical;font-size:13px;line-height:1.8;font-family:inherit"
+            placeholder="e.g. Direct and authoritative with a dry wit. Short, punchy sentences — lead with the insight, then the evidence. Professional but never academic; no jargon without explanation. Always back claims with a number. Never use passive voice, exclamation marks, or 'it is worth noting.' Close with a forward-looking kicker, not a summary."
             oninput="state.brandVoice=this.value;scheduleSettingsSave();refreshVoiceBadge()"
-          >${escHtml(state.brandVoice)}</textarea>
-          <div style="font-size:11px;color:var(--text-3);margin-top:5px">Edit freely — saves automatically and applies to every AI generation.</div>
-        </div>` : `
-        <div style="margin-top:16px;padding:24px;border:1px dashed var(--border-md);border-radius:var(--r-md);text-align:center">
-          <div style="font-size:28px;margin-bottom:8px">🎙</div>
-          <div style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:4px">No voice profile yet</div>
-          <div style="font-size:12px;color:var(--text-3)">Paste your newsletter URL above and click Analyze.</div>
-        </div>`}
+          >${escHtml(state.brandVoice || '')}</textarea>
+          <div style="font-size:11px;color:var(--text-3);margin-top:5px">Saves automatically as you type and applies to every AI generation.</div>
+        </div>
+
+        <!-- Optional: auto-generate from your published newsletter -->
+        <details style="margin-top:16px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--text-2);font-weight:600">Or auto-generate it from your published newsletter (optional)</summary>
+          <div style="margin-top:12px;padding:14px;border:1px solid var(--border-md);border-radius:var(--r-md)">
+            <div style="display:flex;gap:8px">
+              <input id="voice-pub-url" class="input" type="url"
+                placeholder="https://yourname.substack.com  or  https://yourpub.beehiiv.com"
+                style="flex:1" ${state.voiceUrlLoading ? 'disabled' : ''}>
+              <button class="btn btn-primary" onclick="discoverVoice()" ${state.voiceUrlLoading ? 'disabled' : ''}>
+                ${state.voiceUrlLoading ? '<span class="spinner"></span> Analyzing…' : '🎙 Analyze'}
+              </button>
+            </div>
+            <div style="margin-top:5px;font-size:11px;color:var(--text-3)">Works with Substack, Beehiiv, Ghost, WordPress — reads up to 12 past issues and fills the box above (you can still edit it).</div>
+            ${state.voiceUrls?.length ? `
+            <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px">
+              ${state.voiceUrls.map((u, i) => `
+              <div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 9px;background:var(--green-soft);border:1px solid var(--green);border-radius:99px;color:var(--green)">
+                ✓ ${escHtml(new URL(u).hostname)}
+                <button style="background:none;border:none;cursor:pointer;color:var(--green);font-size:13px;line-height:1;padding:0;opacity:0.7" data-action="remove-voice-url" data-idx="${i}">×</button>
+              </div>`).join('')}
+            </div>` : ''}
+          </div>
+        </details>
       </div>
 
       <!-- ── AUDIENCE AVATAR ── -->
