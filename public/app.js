@@ -206,6 +206,27 @@ async function init() {
       }
     }
   } catch (e) { console.warn('Init error:', e); }
+
+  // Restore the builder if that's where the user was before refreshing
+  try {
+    if (localStorage.getItem('lwai_open_view') === 'builder') {
+      const openId = localStorage.getItem('lwai_open_nl');
+      if (openId && openId !== 'new' && sb && state.user) {
+        const ok = await loadBuilderData(openId);
+        if (ok) { state.view = 'builder'; autoFetchSources(); }
+        else { localStorage.removeItem('lwai_open_view'); }
+      } else {
+        const draft = readBuilderDraft('new');
+        if (draft) {
+          resetNewsletter();
+          applyBuilderDraft(draft);
+          state.view = 'builder';
+          if (sb && state.user) { state.sources = await loadSourcesFromDB(); autoFetchSources(); }
+        }
+      }
+    }
+  } catch (e) { console.warn('Builder restore error:', e); }
+
   render();
 
   // Handle Stripe redirect params
@@ -249,6 +270,16 @@ async function navigate(view, params = {}) {
     }
     autoFetchSources();
   }
+
+  // Remember where the user is so a refresh can return them here
+  try {
+    if (view === 'builder') {
+      localStorage.setItem('lwai_open_view', 'builder');
+      localStorage.setItem('lwai_open_nl', state.newsletterId || 'new');
+    } else {
+      localStorage.removeItem('lwai_open_view');
+    }
+  } catch (e) {}
 
   render();
   window.scrollTo(0, 0);
@@ -2722,6 +2753,7 @@ function renderLeadBody(sectionId) {
     <div class="story-actions">
       <button class="story-action-btn" data-action="generate-lead-story" data-section="${sectionId}">↺ Regenerate</button>
       <button class="story-action-btn" data-action="edit-story" data-article-id="${entry.id}" data-section="${sectionId}">✎ Edit</button>
+      <button class="story-action-btn" data-action="insert-image" data-article-id="${entry.id}" data-section="${sectionId}">⊞ Image</button>
     </div>
   </div>`;
 }
@@ -3285,9 +3317,35 @@ function showImageModal(articleId, sectionId) {
     }
   };
 
+  // Synthesis entries (lead story / quick hits) have no single URL — pull images
+  // from all the staged source articles instead.
+  const sourceUrls = article?._sources?.map(s => s.url).filter(Boolean) || [];
+
   if (preloaded.length > 0) {
     // Already have images — render immediately
     renderModal(preloaded);
+  } else if (!article?.url && sourceUrls.length) {
+    modal.innerHTML = `
+    <div class="modal-overlay" id="img-modal-overlay">
+      <div class="modal" style="max-width:460px">
+        <div class="modal-header">
+          <div><div class="modal-title">Insert Image</div></div>
+          <button class="btn-icon" data-action="close-modal" style="font-size:18px;line-height:1">×</button>
+        </div>
+        <div class="modal-body" style="padding:32px 20px;text-align:center">
+          <div class="signup-spinner" style="margin:0 auto 16px"></div>
+          <div style="font-size:13px;color:var(--text-2)">Pulling images from your sources…</div>
+        </div>
+      </div>
+    </div>`;
+    modal.querySelector('#img-modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+    Promise.all(sourceUrls.slice(0, 6).map(u =>
+      fetch(`/api/extract-images?url=${encodeURIComponent(u)}`).then(r => r.json()).catch(() => ({}))
+    )).then(results => {
+      const imgs = [...new Set(results.flatMap(d => d.images || (d.imageUrl ? [d.imageUrl] : [])))];
+      if (article) { article.images = imgs; article.imageUrl = imgs[0] || null; }
+      renderModal(imgs);
+    }).catch(() => renderModal([]));
   } else if (article?.url) {
     // Fetch images on demand, show loading state first
     modal.innerHTML = `
@@ -4927,7 +4985,47 @@ function renderTrialBanner() {
 
 // Auto-save debounce
 let _saveTimer = null;
+// ── BUILDER DRAFT PERSISTENCE (survive refresh + autosave debounce window) ─────
+function builderDraftKey(id) { return `lwai_draft_${id || state.newsletterId || 'new'}`; }
+
+function cacheBuilderDraft() {
+  try {
+    const nl = state.newsletter;
+    localStorage.setItem(builderDraftKey(), JSON.stringify({
+      title: nl.title, subject: nl.subject, previewText: nl.previewText,
+      subjectLines: nl.subjectLines, sections: nl.sections,
+      sectionOrder: nl.sectionOrder, sectionMeta: nl.sectionMeta,
+      prompts: nl.prompts, topStoriesContent: nl.topStoriesContent,
+      ts: Date.now(),
+    }));
+    localStorage.setItem('lwai_open_view', 'builder');
+    localStorage.setItem('lwai_open_nl', state.newsletterId || 'new');
+  } catch (e) { /* storage full/unavailable */ }
+}
+
+function readBuilderDraft(id) {
+  try { const raw = localStorage.getItem(builderDraftKey(id)); return raw ? JSON.parse(raw) : null; }
+  catch (e) { return null; }
+}
+
+function clearBuilderDraft(id) { try { localStorage.removeItem(builderDraftKey(id)); } catch (e) {} }
+
+function applyBuilderDraft(draft) {
+  if (!draft) return;
+  const nl = state.newsletter;
+  if (draft.title != null)            nl.title            = draft.title;
+  if (draft.subject != null)          nl.subject          = draft.subject;
+  if (draft.previewText != null)      nl.previewText      = draft.previewText;
+  if (draft.subjectLines)             nl.subjectLines     = draft.subjectLines;
+  if (draft.sections)                 nl.sections         = draft.sections;
+  if (draft.sectionOrder)             nl.sectionOrder     = draft.sectionOrder;
+  if (draft.sectionMeta)              nl.sectionMeta      = draft.sectionMeta;
+  if (draft.prompts)                  nl.prompts          = draft.prompts;
+  if (draft.topStoriesContent != null) nl.topStoriesContent = draft.topStoriesContent;
+}
+
 function scheduleSave() {
+  cacheBuilderDraft(); // mirror immediately so a refresh never loses in-progress edits
   if (!sb || !state.user) return;
   setSaveIndicator('saving');
   clearTimeout(_saveTimer);
@@ -4968,8 +5066,13 @@ async function saveNewsletter() {
     } else {
       const { data: row, error } = await sb.from('newsletters').insert(payload).select('id').single();
       if (error) throw error;
+      // Migrate the "new" draft to the freshly-minted id so a refresh still recovers it
+      clearBuilderDraft('new');
       state.newsletterId = row.id;
+      try { localStorage.setItem('lwai_open_nl', row.id); } catch (e) {}
     }
+    // DB is now authoritative for everything saved — drop the local recovery draft
+    clearBuilderDraft();
     setSaveIndicator('saved');
   } catch (e) {
     console.error('Save error:', e);
@@ -4997,9 +5100,9 @@ async function loadNewslettersFromDB() {
 }
 
 async function loadBuilderData(newsletterId) {
-  if (!sb) return;
+  if (!sb) return false;
   const { data: nl, error } = await sb.from('newsletters').select('*').eq('id', newsletterId).single();
-  if (error || !nl) { console.error('Load newsletter error:', error); return; }
+  if (error || !nl) { console.error('Load newsletter error:', error); return false; }
   state.newsletterId = nl.id;
   state.newsletter.title        = nl.title        || 'Untitled Newsletter';
   state.newsletter.subject      = nl.subject       || '';
@@ -5018,7 +5121,11 @@ async function loadBuilderData(newsletterId) {
   state.newsletter.topStoriesContent = nl.top_stories_content || '';
   state.newsletter.prompts           = nl.prompts            || state.newsletter.prompts;
   state.approvalStatus         = nl.status        || 'draft';
+  // Recover any unsaved edits made just before a refresh (newer than the DB row)
+  const draft = readBuilderDraft(newsletterId);
+  if (draft && draft.ts > Date.parse(nl.updated_at || 0)) applyBuilderDraft(draft);
   state.sources = await loadSourcesFromDB();
+  return true;
 }
 
 function resetNewsletter() {
