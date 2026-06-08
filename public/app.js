@@ -354,7 +354,8 @@ function handleClick(e) {
         .map(id => ({ id, name: state.newsletter.sectionMeta[id]?.name || id }));
       if (!secs.length) { toast('No sections in current newsletter', 'warn'); break; }
       setUserSections(secs);
-      toast(`Imported ${secs.length} sections from builder`, 'success');
+      // Also capture the full layout (types + prompts) so new newsletters start with it
+      saveSectionLayoutAsDefault();
       break;
     }
     case 'reset-section-layout': {
@@ -411,6 +412,8 @@ function handleClick(e) {
     case 'remove-voice-url':  removeVoiceURL(parseInt(d.idx)); break;
     case 'clear-brand-voice': state.brandVoice = ''; state.brandVoiceSamples = ''; state.voiceUrls = []; scheduleSettingsSave(); render(); break;
     case 'show-add-section':  showAddSectionModal(); break;
+    case 'save-section-default':  saveSectionLayoutAsDefault(); break;
+    case 'clear-section-default': clearSectionLayoutDefault(); break;
     case 'rename-section':    inlineRenameSection(d.sectionId); break;
     case 'remove-section':    removeSection(d.sectionId); break;
     case 'confirm-add-section': confirmAddSection(); break;
@@ -2512,8 +2515,10 @@ function renderEditorSections() {
     const meta = state.newsletter.sectionMeta[id] || { name: id, type: 'generic' };
     if (meta.type === 'briefing') return renderTopStoriesSection(id, meta.name);
     return renderSection(id, meta.name, meta.type);
-  }).join('') + `<div style="padding:12px 0;text-align:center">
+  }).join('') + `<div style="padding:12px 0;text-align:center;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
     <button class="btn btn-ghost btn-sm" data-action="show-add-section">+ Add section</button>
+    <button class="btn btn-ghost btn-sm" data-action="save-section-default" title="Use this section layout & prompts for every new newsletter${canUsePubs() ? ' in this publication' : ''}">★ Save as default layout</button>
+    ${state.defaultPrompts?._layout ? `<button class="btn btn-ghost btn-sm" data-action="clear-section-default" title="Go back to the standard sections for new newsletters" style="color:var(--text-3)">Reset default</button>` : ''}
   </div>`;
 }
 
@@ -5144,34 +5149,86 @@ async function loadBuilderData(newsletterId) {
   return true;
 }
 
+// Maps a section type to its default-prompt key in state.defaultPrompts.
+function typeDefaultKey(type) {
+  return ({ briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta' })[type] || 'generic';
+}
+
 function resetNewsletter() {
   const dp = state.defaultPrompts || {};
-  // Map default prompts by section type onto the default section IDs
   state.newsletterId = null;
-  state.newsletter = {
-    title: 'Untitled Newsletter',
-    subject: '',
-    previewText: '',
-    subjectLines: [],
-    sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
-    topStoriesContent: '',
-    prompts: {
-      topStories: dp.briefing || '',
-      leadStory:  dp.lead     || '',
-      quickHits:  dp.hits     || '',
-      cta:        dp.cta      || '',
-    },
-    sectionOrder: ['topStories', 'leadStory', 'quickHits', 'cta'],
-    sectionMeta: {
-      topStories: { name: "Today's Briefing", type: 'briefing' },
-      leadStory:  { name: 'Lead Story',       type: 'lead' },
-      quickHits:  { name: 'Quick Hits',       type: 'hits' },
-      cta:        { name: 'Sponsor / CTA',    type: 'cta' },
-    },
-  };
+  const layout = dp._layout;
+
+  if (layout && Array.isArray(layout.order) && layout.order.length) {
+    // Start new newsletters from the user's saved section layout (per publication)
+    const sections = {};
+    const prompts = {};
+    const meta = {};
+    for (const id of layout.order) {
+      const m = layout.meta?.[id] || { name: id, type: 'generic' };
+      meta[id] = { name: m.name || id, type: m.type || 'generic' };
+      sections[id] = [];
+      // Prefer the layout's saved prompt, then a per-section default, then the type default
+      prompts[id] = layout.prompts?.[id] || dp[id] || dp[typeDefaultKey(meta[id].type)] || '';
+    }
+    state.newsletter = {
+      title: 'Untitled Newsletter', subject: '', previewText: '', subjectLines: [],
+      sections, topStoriesContent: '', prompts,
+      sectionOrder: [...layout.order],
+      sectionMeta: meta,
+    };
+  } else {
+    // Default layout — map default prompts by section type onto the built-in section IDs
+    state.newsletter = {
+      title: 'Untitled Newsletter',
+      subject: '',
+      previewText: '',
+      subjectLines: [],
+      sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
+      topStoriesContent: '',
+      prompts: {
+        topStories: dp.briefing || '',
+        leadStory:  dp.lead     || '',
+        quickHits:  dp.hits     || '',
+        cta:        dp.cta      || '',
+      },
+      sectionOrder: ['topStories', 'leadStory', 'quickHits', 'cta'],
+      sectionMeta: {
+        topStories: { name: "Today's Briefing", type: 'briefing' },
+        leadStory:  { name: 'Lead Story',       type: 'lead' },
+        quickHits:  { name: 'Quick Hits',       type: 'hits' },
+        cta:        { name: 'Sponsor / CTA',    type: 'cta' },
+      },
+    };
+  }
   state.approvalStatus = 'draft';
   state.teamComments = [];
   state.versions = [{ num: 'v1', desc: 'Initial draft', time: 'just now' }];
+}
+
+// Capture the current newsletter's section layout + prompts as the per-publication
+// default so every new newsletter starts with these sections.
+function saveSectionLayoutAsDefault() {
+  if (!state.defaultPrompts) state.defaultPrompts = {};
+  state.defaultPrompts._layout = {
+    order: [...state.newsletter.sectionOrder],
+    meta: JSON.parse(JSON.stringify(state.newsletter.sectionMeta || {})),
+    prompts: { ...state.newsletter.prompts },
+  };
+  // Keep the Settings → Section Defaults list in sync so both views agree
+  state.defaultPrompts._sections = state.newsletter.sectionOrder.map(id => ({
+    id, name: state.newsletter.sectionMeta[id]?.name || id,
+  }));
+  scheduleSettingsSave();
+  toast('Saved — new newsletters will start with these sections & prompts', 'success');
+}
+
+function clearSectionLayoutDefault() {
+  if (!state.defaultPrompts) return;
+  delete state.defaultPrompts._layout;
+  scheduleSettingsSave();
+  toast('Reset — new newsletters will use the standard layout', 'info');
+  render();
 }
 
 async function saveSourceToDB(source) {
