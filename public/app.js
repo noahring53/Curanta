@@ -2333,7 +2333,19 @@ function renderFeedGroup(feed) {
 </div>`;
 }
 
+function firstSectionOfType(type) {
+  return state.newsletter.sectionOrder.find(id => state.newsletter.sectionMeta[id]?.type === type) || null;
+}
+window.firstSectionOfType = firstSectionOfType;
+
 function renderArticleCard(article, feedId, isInSection) {
+  // A picker for every section in the newsletter — including custom ones — so
+  // articles can be added anywhere, not just the two built-in sections.
+  const options = state.newsletter.sectionOrder.map(id => {
+    const m = state.newsletter.sectionMeta[id] || { name: id };
+    return `<option value="${id}">${escHtml(m.name)}</option>`;
+  }).join('');
+  const dblTarget = firstSectionOfType('lead') || 'leadStory';
   return `
 <div class="article-card ${isInSection ? 'in-section' : ''}"
   draggable="true"
@@ -2341,15 +2353,19 @@ function renderArticleCard(article, feedId, isInSection) {
   data-feed-id="${feedId}"
   ondragstart="dragStart(event,'${article.id}')"
   ondragend="dragEnd(event)"
-  ondblclick="addToSection('${article.id}','leadStory')">
+  ondblclick="addToSection('${article.id}','${dblTarget}')">
   <div class="article-card-title">${escHtml(article.title)}</div>
   <div class="article-card-meta">
     <span class="article-card-source">${escHtml(article.source || '')}</span>
     <span class="article-card-time">${article.timeAgo || ''}</span>
   </div>
   <div class="article-card-actions">
-    <button class="article-card-btn" data-action="add-to-section" data-article-id="${article.id}" data-section="leadStory" title="Add to Lead Story">Lead</button>
-    <button class="article-card-btn" data-action="add-to-section" data-article-id="${article.id}" data-section="quickHits" title="Add to Quick Hits">Hit</button>
+    <select class="article-card-btn" title="Add this article to a section"
+      style="flex:1;min-width:0;cursor:pointer"
+      onchange="if(this.value){addToSection('${article.id}',this.value);this.selectedIndex=0;}">
+      <option value="">＋ Add to section…</option>
+      ${options}
+    </select>
     <button class="article-card-btn remove-btn" data-action="remove-article" data-feed-id="${feedId}" data-article-id="${article.id}" title="Remove article">×</button>
   </div>
 </div>`;
