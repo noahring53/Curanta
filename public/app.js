@@ -2670,7 +2670,7 @@ function removeLeadSource(sectionId, articleId) {
   if (!entry._sources.length && !entry.content) {
     state.newsletter.sections[sectionId] = state.newsletter.sections[sectionId].filter(a => a !== entry);
   }
-  refreshSectionContent(sectionId);
+  refreshSection(sectionId);
   refreshSourceSidebar();
   scheduleSave();
 }
@@ -2695,7 +2695,7 @@ function renderLeadSection(sectionId, label) {
     <div class="section-prompt-wrap">
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="${cfg.promptPlaceholder}">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
-      <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}" ${n === 0 ? 'disabled' : ''}>✦ Generate${n > 1 ? ` (${n})` : ''}</button>
+      <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
     </div>
   </div>
@@ -3126,6 +3126,18 @@ function formatContent(text) {
     .replace(/\n/g, '<br>');
 }
 
+// Re-render an entire section (header + body) so controls like the Generate
+// button's count/state stay in sync after staging or removing articles.
+function refreshSection(sectionId) {
+  const el = document.getElementById(`section-${sectionId}`);
+  const meta = state.newsletter.sectionMeta[sectionId] || { name: sectionId, type: 'generic' };
+  if (!el) { refreshSectionContent(sectionId); return; }
+  el.outerHTML = meta.type === 'briefing'
+    ? renderTopStoriesSection(sectionId, meta.name)
+    : renderSection(sectionId, meta.name, meta.type);
+  setupDropZones();
+}
+
 function refreshSectionContent(sectionId) {
   const container = document.getElementById(`section-content-${sectionId}`);
   if (!container) return;
@@ -3189,7 +3201,7 @@ async function addToSection(articleId, sectionId) {
       toast('Already added to this section', 'warn'); return;
     }
     entry._sources.push(toLeadSource(article));
-    refreshSectionContent(sectionId);
+    refreshSection(sectionId); // re-render header too so the Generate button updates
     refreshSourceSidebar();
     scheduleSave();
     return;
