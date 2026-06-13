@@ -966,17 +966,23 @@ Output ONLY the bullet lines followed by the single Sources line — no intro, n
 
 Rules:
 - Under 52 characters each (most email clients truncate beyond this)
-- Create curiosity or convey clear value — not both, pick one
-- Be specific: numbers, names, and concrete claims outperform vague promises
+- Be specific: real numbers, names, and concrete claims outperform vague promises
+- Only use facts that appear in the content below — NEVER invent a number or claim
 - Never use: "You won't believe", "This will change", "Game-changer", or clickbait questions
 - No emojis unless the newsletter's voice explicitly uses them
 - Avoid colons — they read as corporate
 
-Generate 3 options. Number them. No explanations.${customPrompt ? `\n\nThe editor has given specific instructions for these subject lines — follow them above all other rules:\n${customPrompt}` : ''}`,
-      user: `Write 3 subject lines for this newsletter issue.${customPrompt ? `\n\nEditor's instructions (follow these): ${customPrompt}` : ''}\n\nNewsletter title: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\n\nToday's Briefing:\n${content.topStoriesContent.slice(0, 800)}` : ''}\n\nContent summary:\n${content.summary || articleContext || ''}`,
+Generate 5 options, each taking a DIFFERENT angle so the writer can choose the best fit:
+1. Lead with the hardest number or stat in the content
+2. Curiosity gap — tease the surprising part without giving it away
+3. Contrarian — the thing most coverage is getting wrong or missing
+4. Plain clarity — the single most important takeaway, stated flat
+5. Recognizable name — the most well-known person, company, or place involved
+Put the single strongest option first. Number them 1-5. No explanations, no labels.${customPrompt ? `\n\nThe editor has given specific instructions for these subject lines — follow them above all other rules:\n${customPrompt}` : ''}`,
+      user: `Write 5 subject lines for this newsletter issue.${customPrompt ? `\n\nEditor's instructions (follow these): ${customPrompt}` : ''}\n\nNewsletter title: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\n\nToday's Briefing:\n${content.topStoriesContent.slice(0, 800)}` : ''}\n\nContent summary:\n${content.summary || articleContext || ''}`,
     },
     'preview-text': {
-      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Be specific — pull the sharpest detail or stat from the content. Drive the open. No emojis.${customPrompt ? `\n\nThe editor has given specific instructions — follow them above all other rules:\n${customPrompt}` : ''}`,
+      system: `You write email preview text — the 60–90 character snippet shown in the inbox beside the subject line. It must complement, not repeat, the subject line. Be specific — pull the sharpest detail or stat from the content. Only use facts that appear in the content — never invent. Drive the open. No emojis.${customPrompt ? `\n\nThe editor has given specific instructions — follow them above all other rules:\n${customPrompt}` : ''}`,
       user: `Write preview text for this newsletter issue.${customPrompt ? `\nEditor's instructions (follow these): ${customPrompt}` : ''}\nNewsletter: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\nBriefing highlights:\n${content.topStoriesContent.slice(0, 600)}` : ''}\nContent:\n${content.summary || content.text?.slice(0, 400) || ''}`,
     },
     rewrite: {
