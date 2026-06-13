@@ -60,6 +60,11 @@ const anthropic = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
+// Default model for most actions; optionally use a stronger model for the
+// flagship long-form lead story. Both overridable via env for easy upgrades.
+const MODEL       = process.env.ANTHROPIC_MODEL       || 'claude-sonnet-4-6';
+const MODEL_LEAD  = process.env.ANTHROPIC_MODEL_LEAD  || MODEL;
+
 const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
   : null;
@@ -660,6 +665,38 @@ const TONES = {
   'sharp-political': 'You write with a sharp political newsletter voice. Punchy insider framing, urgency, strategic context. Readers feel they are getting the real story.',
 };
 
+// Shared grounding rules injected into every content writer. This is the single
+// biggest quality + safety lever for a news tool: it stops the model inventing
+// facts and kills the tell-tale AI clichés that make copy read as generated.
+const GROUNDING = `
+
+GROUNDING — non-negotiable:
+- Use ONLY facts, numbers, statistics, names, quotes, titles, and dates that appear in the source material provided. Never invent, round, estimate, or extrapolate a figure. If a detail isn't in the source, leave it out — do not guess.
+- Never fabricate a quote or attribute a statement to someone the source didn't quote.
+- If sources disagree on a fact, say so briefly rather than silently picking one.
+- Do not add background "context" that isn't supported by the source unless it is common, uncontroversial knowledge.
+
+STYLE — never use these (they scream AI):
+- Phrases: "in today's fast-paced world", "in an era of", "it's worth noting", "it is important to note", "delve", "tapestry", "a testament to", "navigate the complexities", "underscores", "highlights the importance of", "the landscape of", "game-changer", "in conclusion", "moving forward", "rest assured", "when it comes to", "needless to say".
+- No throat-clearing intros, no rhetorical-question padding, no summary sentence that just restates the piece. Lead with substance, end on a sharp note.`;
+
+// Per-action sampling temperature. Lower = more grounded/consistent (good for
+// factual synthesis); higher = more varied (good for creative headline work).
+const TEMPERATURE = {
+  'lead-story': 0.6,
+  'quick-hit': 0.5,
+  'quick-hits': 0.5,
+  'top-stories': 0.4,
+  'rewrite': 0.5,
+  'summarize': 0.3,
+  'cta': 0.7,
+  'subject-line': 0.9,
+  'preview-text': 0.8,
+  'hooks': 0.95,
+  'brand-voice': 0.4,
+  'briefing-prompt': 0.4,
+};
+
 // Mock responses for when no API key is configured
 function extractKeyFact(text = '') {
   // Try patterns in priority order — most specific first
@@ -840,7 +877,7 @@ HYPERLINKS — required, this is important:
 
       if (multi) {
         return {
-          system: `${toneDesc}${voiceNote}${audienceNote}
+          system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write ONE newsletter lead story that SYNTHESIZES several reports about the SAME event into a single authoritative piece — 320–420 words, 5–6 paragraphs.
 
@@ -864,7 +901,7 @@ Writing rules:
       }
 
       return {
-        system: `${toneDesc}${voiceNote}${audienceNote}
+        system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write newsletter lead stories — 300–380 words, 5–6 paragraphs.
 
@@ -887,7 +924,7 @@ Writing rules:
       };
     })(),
     'quick-hit': {
-      system: `${toneDesc}${voiceNote}${audienceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write newsletter quick hits — tight 80–110 word blurbs that give the reader the one thing they need to know and why it matters.
 
@@ -907,7 +944,7 @@ Rules:
         `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 500)}`
       ).join('\n\n');
       return {
-        system: `${toneDesc}${voiceNote}${audienceNote}
+        system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write a newsletter "Quick Hits" section: a scannable bulleted list of short, punchy news items. You are given several articles — each is a DIFFERENT story. Produce exactly ONE line per article, in the same order.
 
@@ -943,7 +980,7 @@ Generate 3 options. Number them. No explanations.${customPrompt ? `\n\nThe edito
       user: `Write preview text for this newsletter issue.${customPrompt ? `\nEditor's instructions (follow these): ${customPrompt}` : ''}\nNewsletter: ${content.title || 'Newsletter'}${content.topStoriesContent ? `\nBriefing highlights:\n${content.topStoriesContent.slice(0, 600)}` : ''}\nContent:\n${content.summary || content.text?.slice(0, 400) || ''}`,
     },
     rewrite: {
-      system: `${toneDesc}${voiceNote}${audienceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You rewrite source material into polished newsletter copy. Preserve all key facts. Cut everything else. Match the specified tone exactly. Improve clarity, momentum, and rhythm.
 
@@ -956,17 +993,19 @@ Rules:
       user: `Rewrite this for a newsletter:\n${customPrompt ? `Instructions: ${customPrompt}\n` : ''}\n${articleContext || content.text || content.summary}`,
     },
     summarize: {
-      system: `You summarize content in exactly 3 concise sentences for newsletter readers. Sentence 1: the most important specific fact (bold the key number or claim). Sentence 2: the most important context or implication. Sentence 3: what to watch or do next. No padding, no hedging.`,
+      system: `${GROUNDING}
+
+You summarize content in exactly 3 concise sentences for newsletter readers. Sentence 1: the most important specific fact (bold the key number or claim). Sentence 2: the most important context or implication. Sentence 3: what to watch or do next. No padding, no hedging.`,
       user: `Summarize in 3 sentences:\n${articleContext}`,
     },
     hooks: {
-      system: `${toneDesc}${audienceNote}
+      system: `${toneDesc}${audienceNote}${GROUNDING}
 
-You write newsletter hooks — single punchy lines that make readers stop scrolling and want to read on. Each starts with →. No questions. Specific beats vague. Create intrigue by implying there's something most people don't know yet.`,
+You write newsletter hooks — single punchy lines that make readers stop scrolling and want to read on. Each starts with →. No questions. Specific beats vague. Create intrigue by implying there's something most people don't know yet — but only tease facts that are actually in the source.`,
       user: `Write 4 hooks for this content:\n${articleContext}`,
     },
     cta: {
-      system: `${toneDesc}${voiceNote}${audienceNote}
+      system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write newsletter calls-to-action that convert. 2–3 sentences. Make it feel like a natural extension of the newsletter's voice — not a sales pitch bolted on at the end. Be specific about what the reader gets. One clear action.`,
       user: customPrompt
@@ -1000,7 +1039,9 @@ Quote actual short phrases or patterns from the samples to make the profile conc
         `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 400)}`
       ).join('\n\n');
       return {
-        system: `You write a "Today's Briefing" section for a newsletter. Format: one line per article, no bullet points.
+        system: `${GROUNDING}
+
+You write a "Today's Briefing" section for a newsletter. Format: one line per article, no bullet points.
 
 Each line: [emoji] [stat or sharpest fact] [brief context] [source URL]
 
@@ -1022,13 +1063,17 @@ Examples:
 
   const p = prompts[action] || prompts.rewrite;
 
-  // Allow more tokens for long-form pieces; quick hits need far less
-  const maxTokens = action === 'brand-voice' ? 3000 : ['lead-story', 'rewrite'].includes(action) ? 2000 : 1200;
+  // Allow more tokens for long-form pieces and multi-article lists
+  const maxTokens = action === 'brand-voice' ? 3000
+    : ['lead-story', 'rewrite'].includes(action) ? 2000
+    : ['quick-hits', 'top-stories'].includes(action) ? 1600
+    : 1200;
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: action === 'lead-story' ? MODEL_LEAD : MODEL,
       max_tokens: maxTokens,
+      temperature: TEMPERATURE[action] ?? 0.7,
       system: p.system,
       messages: [{ role: 'user', content: p.user }],
     });
