@@ -695,7 +695,7 @@ function extractKeyFact(text = '') {
 }
 
 function mockResponse(action, content, contents = []) {
-  if (action === 'top-stories') {
+  if (action === 'top-stories' || action === 'quick-hits') {
     const items = contents.length ? contents : [content];
     const emojis = ['🔴','🤖','📅','🏠','💼','📈','🌍','⚖️'];
     const bullets = items.map((a, i) => {
