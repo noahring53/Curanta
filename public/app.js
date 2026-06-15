@@ -1534,8 +1534,8 @@ function renderDashboard() {
           <div class="onboard-banner-sub">You're set up. Here's how to publish your first newsletter in under 15 minutes:</div>
           <div class="onboard-steps">
             <div class="onboard-step"><div class="onboard-num">1</div><div><strong>Add a source</strong> — paste an RSS feed URL or any article link in the builder's Sources panel.</div></div>
-            <div class="onboard-step"><div class="onboard-num">2</div><div><strong>Drag &amp; drop</strong> — pull articles into your Lead Story and Quick Hits sections.</div></div>
-            <div class="onboard-step"><div class="onboard-num">3</div><div><strong>Hit Apply</strong> — AI writes everything in your voice. Copy the HTML and paste into Beehiiv, Substack, or Mailchimp.</div></div>
+            <div class="onboard-step"><div class="onboard-num">2</div><div><strong>Add articles to a section</strong> — use each article's <strong>＋ Add to section</strong> menu, or drag it in.</div></div>
+            <div class="onboard-step"><div class="onboard-num">3</div><div><strong>Click ✦ Generate</strong> — AI writes each section in your voice. Then <strong>Copy HTML</strong> or <strong>Copy for Beehiiv</strong> to publish.</div></div>
           </div>
         </div>
         <button class="btn btn-primary" style="flex-shrink:0;align-self:flex-start" data-action="open-builder">Create your first newsletter →</button>
@@ -1653,7 +1653,8 @@ function renderSourcesPage() {
             ['TechCrunch', 'https://techcrunch.com/feed/'],
             ['The Verge', 'https://www.theverge.com/rss/index.xml'],
             ['Axios', 'https://api.axios.com/feed/'],
-            ['Politico', 'https://www.politico.com/rss/politics08.xml'],
+            ['BBC News', 'https://feeds.bbci.co.uk/news/rss.xml'],
+            ['NPR', 'https://feeds.npr.org/1001/rss.xml'],
           ].map(([label, url]) => `<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="quickAddFeed('${url}')">${label}</button>`).join('')}
         </div>
       </div>
@@ -2289,8 +2290,8 @@ function renderSourceSidebar() {
       <strong style="color:var(--text-2);font-size:13px">No sources yet</strong>
       <p style="margin-top:6px">Paste an RSS feed URL or article link above to get started.</p>
       <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px">
-        <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://feeds.feedburner.com/TechCrunch')">Try TechCrunch RSS</button>
-        <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://feeds.reuters.com/reuters/technologyNews')">Try Reuters Tech</button>
+        <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://techcrunch.com/feed/')">Try TechCrunch</button>
+        <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://feeds.bbci.co.uk/news/rss.xml')">Try BBC News</button>
       </div>
     </div>`;
   }
@@ -2799,7 +2800,7 @@ function renderSection(sectionId, label, type = 'hits') {
     <div class="section-prompt-wrap">
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt for this issue…">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
-      <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}">▶ Apply</button>
+      <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
     </div>
   </div>
@@ -3032,13 +3033,13 @@ function renderDropPlaceholder(sectionId) {
       label: 'No CTA yet',
       hint: 'Add a sponsor blurb, link, or call to action.',
       steps: [
-        'Paste a URL with your sponsor\'s page in Sources',
-        'Drag it here or double-click it',
-        'Click Apply — AI writes a native-feeling CTA',
+        'Paste your sponsor\'s page URL in Sources',
+        'Add it here via the article\'s ＋ Add to section menu',
+        'Click ✦ Generate — AI writes a native-feeling CTA',
       ],
     },
   };
-  const c = cfg[sectionId] || { icon: '⊕', label: 'Drop articles here', hint: 'Drag article cards from the Sources panel', steps: [] };
+  const c = cfg[sectionId] || { icon: '⊕', label: 'No articles yet', hint: 'Add articles with each card\'s ＋ Add to section menu, or drag them in from the Sources panel.', steps: [] };
   return `<div class="drop-placeholder">
     <div class="drop-placeholder-icon">${c.icon}</div>
     <p>${c.label}</p>
@@ -3104,7 +3105,7 @@ function renderStoryBlock(article, sectionId) {
       <button class="btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px"
         data-action="edit-story" data-article-id="${article.id}" data-section="${sectionId}">✎ Edit</button>
     </div>
-    <div class="story-content">${content ? formatContent(content) : '<span style="color:var(--text-3);font-style:italic">No content yet — click Apply or Edit</span>'}</div>
+    <div class="story-content">${content ? formatContent(content) : '<span style="color:var(--text-3);font-style:italic">No content yet — click ✦ Generate or Edit</span>'}</div>
     <div class="story-actions">
       <button class="story-action-btn" data-action="rewrite-story" data-article-id="${article.id}" data-section="${sectionId}">↺ Rewrite</button>
       <button class="story-action-btn" data-action="shorten-story" data-article-id="${article.id}" data-section="${sectionId}">⟵ Shorten</button>
