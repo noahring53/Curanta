@@ -7,6 +7,49 @@ import Parser from 'rss-parser';
 import Anthropic from '@anthropic-ai/sdk';
 import Stripe from 'stripe';
 import rateLimit from 'express-rate-limit';
+import dns from 'node:dns/promises';
+import net from 'node:net';
+
+// ── SSRF guard ────────────────────────────────────────────────────────────────
+// Every endpoint that fetches a user-supplied URL must call assertSafeUrl first,
+// or an attacker could reach internal services / cloud metadata (169.254.169.254).
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;            // link-local + cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;   // private
+    if (a === 192 && b === 168) return true;            // private
+    if (a === 100 && b >= 64 && b <= 127) return true;  // CGNAT
+    if (a >= 224) return true;                          // multicast/reserved
+    return false;
+  }
+  const v = ip.toLowerCase();
+  if (v === '::1' || v === '::') return true;
+  if (v.startsWith('fe80')) return true;                // link-local
+  if (v.startsWith('fc') || v.startsWith('fd')) return true; // unique-local
+  if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7)); // IPv4-mapped
+  return false;
+}
+
+async function assertSafeUrl(rawUrl) {
+  let u;
+  try { u = new URL(rawUrl); } catch { throw new Error('Invalid URL'); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Only http(s) URLs are allowed');
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) {
+    throw new Error('Blocked host');
+  }
+  if (net.isIP(host)) {
+    if (isPrivateIp(host)) throw new Error('Blocked private address');
+    return;
+  }
+  let addrs;
+  try { addrs = await dns.lookup(host, { all: true }); } catch { throw new Error('Could not resolve host'); }
+  for (const a of addrs) {
+    if (isPrivateIp(a.address)) throw new Error('Blocked private address');
+  }
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -280,11 +323,13 @@ function timeAgo(dateStr) {
 }
 
 async function fetchArticle(url) {
+  await assertSafeUrl(url);
   const res = await fetch(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (compatible; Curanta/1.0)',
       Accept: 'text/html,application/xhtml+xml',
     },
+    redirect: 'follow',
     signal: AbortSignal.timeout(10000),
   });
 
@@ -417,55 +462,52 @@ async function fetchArticle(url) {
 app.get('/api/ingest', ingestLimiter, async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'url is required' });
+  // quick=1 returns RSS items immediately (summaries only); full text is hydrated
+  // lazily via /api/hydrate when an article is actually used. Default: full fetch.
+  const quick = req.query.quick === '1' || req.query.quick === 'true';
+
+  try { await assertSafeUrl(url); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Try RSS/Atom first
   try {
     const feed = await rssParser.parseURL(url);
     const rawItems = feed.items.slice(0, 16);
+    const feedSource = feed.title || new URL(url).hostname.replace(/^www\./, '');
 
-    const articles = await Promise.all(
-      rawItems.map(async (item) => {
-        const base = {
-          id: crypto.randomUUID(),
-          title: item.title?.trim() || 'Untitled',
-          url: item.link || '',
-          summary: stripHtml(item.contentSnippet || item.content || '').slice(0, 350),
-          text: '',
-          source: feed.title || new URL(url).hostname.replace(/^www\./, ''),
-          publishedAt: item.pubDate || item.isoDate || new Date().toISOString(),
-          timeAgo: timeAgo(item.pubDate || item.isoDate || new Date().toISOString()),
-          type: 'rss',
-        };
-        // Best-effort: fetch full article text + images
-        if (item.link) {
-          try {
-            const full = await fetchArticle(item.link);
-            return {
-              ...base,
-              text: full.text,
-              summary: base.summary || full.summary,
-              images: full.images || [],
-              imageUrl: full.imageUrl || null,
-            };
-          } catch {
-            return base;
-          }
-        }
-        return base;
-      })
-    );
-
-    return res.json({
-      type: 'feed',
-      source: feed.title || new URL(url).hostname.replace(/^www\./, ''),
-      feedUrl: url,
-      articles,
+    const buildBase = (item) => ({
+      id: crypto.randomUUID(),
+      title: item.title?.trim() || 'Untitled',
+      url: item.link || '',
+      summary: stripHtml(item.contentSnippet || item.content || '').slice(0, 350),
+      text: '',
+      source: feedSource,
+      publishedAt: item.pubDate || item.isoDate || new Date().toISOString(),
+      timeAgo: timeAgo(item.pubDate || item.isoDate || new Date().toISOString()),
+      type: 'rss',
     });
+
+    let articles;
+    if (quick) {
+      // Instant: no per-article fetch. Text/images filled on demand later.
+      articles = rawItems.map(buildBase);
+    } else {
+      articles = await Promise.all(rawItems.map(async (item) => {
+        const base = buildBase(item);
+        if (!item.link) return base;
+        try {
+          const full = await fetchArticle(item.link);
+          return { ...base, text: full.text, summary: base.summary || full.summary, images: full.images || [], imageUrl: full.imageUrl || null };
+        } catch { return base; }
+      }));
+    }
+
+    return res.json({ type: 'feed', source: feedSource, feedUrl: url, articles });
   } catch (_rssErr) {
     // Fall through to single-article attempt
   }
 
-  // Try as a single article page
+  // Try as a single article page (always full — it's just one)
   try {
     const article = await fetchArticle(url);
     return res.json({
@@ -476,6 +518,25 @@ app.get('/api/ingest', ingestLimiter, async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ error: `Could not parse URL: ${e.message}` });
+  }
+});
+
+// ── /api/hydrate ──────────────────────────────────────────────────────────────
+// Fetch full text + images for a single article on demand (used after quick
+// ingest so generation always has real source material without the upfront wait).
+app.get('/api/hydrate', ingestLimiter, async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url required' });
+  try {
+    const article = await fetchArticle(url);
+    res.json({
+      text: article.text || '',
+      summary: article.summary || '',
+      images: article.images || [],
+      imageUrl: article.imageUrl || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, text: '' });
   }
 });
 
@@ -498,6 +559,8 @@ app.get('/api/discover-voice', voiceLimiter, async (req, res) => {
 
   let base;
   try { base = new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
+  try { await assertSafeUrl(url); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Always probe the origin, even if they pasted a specific post URL
   const origin = base.origin;

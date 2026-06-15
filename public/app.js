@@ -198,7 +198,7 @@ async function init() {
         }));
         // Re-fetch articles for each restored feed in the background
         state.sources.forEach(src => {
-          fetch(`/api/ingest?url=${encodeURIComponent(src.feedUrl)}`)
+          fetch(`/api/ingest?url=${encodeURIComponent(src.feedUrl)}&quick=1`)
             .then(r => r.json())
             .then(data => { src.articles = data.articles || []; refreshSourceSidebar(); })
             .catch(() => {});
@@ -2384,7 +2384,7 @@ async function submitAddSource(form) {
   btn.disabled = true;
   btn.textContent = '…';
   try {
-    const res = await fetch(`/api/ingest?url=${encodeURIComponent(url)}`);
+    const res = await fetch(`/api/ingest?url=${encodeURIComponent(url)}&quick=1`);
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'Failed to fetch');
     const existing = state.sources.find(s => s.feedUrl === url);
@@ -2654,6 +2654,7 @@ async function generateLeadStory(sectionId) {
   entry.loading = true; entry.editing = false;
   refreshSectionContent(sectionId);
   try {
+    await hydrateAll(sources); // ensure full source text before synthesizing
     entry.content = await callAI(action, sources[0], { prompt: effectivePrompt(sectionId), contents: sources });
     toast(`${noun.charAt(0).toUpperCase() + noun.slice(1)} generated from ${sources.length} article${sources.length === 1 ? '' : 's'}`, 'success');
   } catch (e) {
@@ -2838,6 +2839,7 @@ async function generateTopStories() {
   const generateBtn = document.querySelector('[data-action="generate-top-stories"]');
   if (generateBtn) { generateBtn.disabled = true; generateBtn.textContent = '…'; }
   try {
+    await hydrateAll(articles); // ensure full text before generating the briefing
     const res = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3180,6 +3182,27 @@ function findArticle(articleId) {
   return null;
 }
 
+// Lazily fetch an article's full text (after quick ingest) so generation always
+// has real source material. Dedupes in-flight fetches by URL; never throws.
+const _hydratingByUrl = new Map();
+async function hydrateArticleText(obj) {
+  if (!obj || !obj.url || (obj.text && obj.text.length > 100)) return obj;
+  let p = _hydratingByUrl.get(obj.url);
+  if (!p) {
+    p = fetch(`/api/hydrate?url=${encodeURIComponent(obj.url)}`).then(r => r.json()).catch(() => ({}));
+    _hydratingByUrl.set(obj.url, p);
+    p.finally(() => _hydratingByUrl.delete(obj.url));
+  }
+  const data = await p;
+  if (data && data.text && (!obj.text || obj.text.length <= 100)) {
+    obj.text = data.text;
+    if (!obj.summary && data.summary) obj.summary = data.summary;
+    if (data.images?.length && !(obj.images || []).length) { obj.images = data.images; obj.imageUrl = data.imageUrl || obj.imageUrl; }
+  }
+  return obj;
+}
+async function hydrateAll(arr) { await Promise.all((arr || []).map(hydrateArticleText)); }
+
 async function addToSection(articleId, sectionId) {
   const article = findArticle(articleId);
   if (!article) { toast('Article not found', 'error'); return; }
@@ -3189,9 +3212,11 @@ async function addToSection(articleId, sectionId) {
   }
   const sectionType = state.newsletter.sectionMeta[sectionId]?.type || 'hits';
   if (sectionType === 'briefing') {
-    state.newsletter.sections[sectionId].push({ ...article });
+    const staged = { ...article };
+    state.newsletter.sections[sectionId].push(staged);
     refreshTopStoriesSection();
     scheduleSave();
+    hydrateArticleText(staged); // background: full text ready by generate time
     return;
   }
   if (isSynthType(sectionType)) {
@@ -3201,10 +3226,12 @@ async function addToSection(articleId, sectionId) {
     if (entry._sources.some(s => (article.url && s.url === article.url) || s.id === articleId)) {
       toast('Already added to this section', 'warn'); return;
     }
-    entry._sources.push(toLeadSource(article));
+    const src = toLeadSource(article);
+    entry._sources.push(src);
     refreshSection(sectionId); // re-render header too so the Generate button updates
     refreshSourceSidebar();
     scheduleSave();
+    hydrateArticleText(src); // background: full text ready by generate time
     return;
   }
   const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
@@ -3214,7 +3241,8 @@ async function addToSection(articleId, sectionId) {
   refreshSectionContent(sectionId);
   refreshSourceSidebar();
   try {
-    const result = await callAI(action, article, { prompt: state.newsletter.prompts[sectionId] });
+    await hydrateArticleText(entry); // ensure full text before writing
+    const result = await callAI(action, entry, { prompt: state.newsletter.prompts[sectionId] });
     entry.content = result;
   } catch (e) {
     entry.content = article.summary || article.text || '(Failed to generate — click Rewrite to retry)';
@@ -3509,6 +3537,7 @@ async function applyPrompt(sectionId) {
   refreshSectionContent(sectionId);
   for (const article of articles) {
     try {
+      await hydrateArticleText(article);
       article.content = await callAI(action, article, { prompt });
     } catch (e) { article.content = article.content || '(Failed)'; }
     article.loading = false;
@@ -3526,6 +3555,7 @@ async function rewriteStory(articleId, sectionId) {
   try {
     const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
     const action = typeToAction[state.newsletter.sectionMeta[sectionId]?.type] || 'quick-hit';
+    await hydrateArticleText(article);
     article.content = await callAI(action, article, { prompt: effectivePrompt(sectionId) });
   } catch (e) { toast('Rewrite failed: ' + e.message, 'error'); }
   article.loading = false;
@@ -5410,7 +5440,7 @@ function autoFetchSources() {
   const unfetched = state.sources.filter(s => s.articles.length === 0);
   if (!unfetched.length) return;
   unfetched.forEach(source => {
-    fetch(`/api/ingest?url=${encodeURIComponent(source.feedUrl)}`)
+    fetch(`/api/ingest?url=${encodeURIComponent(source.feedUrl)}&quick=1`)
       .then(r => r.json())
       .then(data => {
         if (data.articles?.length) {
