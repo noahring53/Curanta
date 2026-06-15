@@ -49,6 +49,7 @@ const state = {
   subjectSourceSection: 'leadStory', // which section drives subject/preview generation ('' = whole issue)
   subjectPrompt: '', // optional custom instructions for subject/preview generation
   sourcesPubScoped: null, // null = unknown, true = DB has publication_id column, false = use localStorage buckets
+  newslettersPubScoped: null, // same, for the newsletters table
   teamComments: [],
   approvalStatus: 'draft', // 'draft' | 'review' | 'approved'
   versions: [],
@@ -1570,6 +1571,12 @@ function renderDashboard() {
                   ${nl.scheduledFor ? `<div class="newsletter-stat">Sends ${new Date(nl.scheduledFor).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : ''}
                 </div>
                 <div class="newsletter-card-actions">
+                  ${canUsePubs() ? `<select class="nl-action-btn" title="Move to a publication" onclick="event.stopPropagation()" onchange="moveNewsletterToPublication('${nl.id}', this.value); event.stopPropagation();" style="cursor:pointer;max-width:120px">
+                    <option value="__cur" selected>📰 ${escHtml(currentPublicationName())}</option>
+                    ${[{ id: '', name: state.defaultPublicationName || 'Default' }, ...state.publications.map(p => ({ id: p.id, name: p.name }))]
+                      .filter(p => (p.id || null) !== (state.currentPublicationId || null))
+                      .map(p => `<option value="${p.id}">Move to ${escHtml(p.name)}</option>`).join('')}
+                  </select>` : ''}
                   <button class="nl-action-btn" data-action="duplicate-newsletter" data-id="${nl.id}" title="Duplicate">⊕ Copy</button>
                   <button class="nl-action-btn danger" data-action="delete-newsletter" data-id="${nl.id}" title="Delete">× Delete</button>
                 </div>
@@ -3489,20 +3496,39 @@ async function duplicateNewsletter(id) {
   if (!sb || !state.user) { toast('Connect Supabase to duplicate newsletters', 'warn'); return; }
   const { data: full, error } = await sb.from('newsletters').select('*').eq('id', id).single();
   if (error || !full) { toast('Could not load newsletter', 'error'); return; }
-  const { data: copy, error: copyErr } = await sb.from('newsletters').insert({
+  const scoped = await ensureNewslettersCapability();
+  const copyPayload = {
     user_id: state.user.id,
     title: (full.title || 'Untitled') + ' (Copy)',
     subject: full.subject || '',
     preview_text: full.preview_text || '',
+    subject_lines: full.subject_lines || [],
     sections: full.sections,
+    top_stories_content: full.top_stories_content || '',
     prompts: full.prompts,
     status: 'draft',
-  }).select('id').single();
+  };
+  if (scoped) copyPayload.publication_id = full.publication_id || null; // keep the copy in the same publication
+  const { data: copy, error: copyErr } = await sb.from('newsletters').insert(copyPayload).select('id').single();
   if (copyErr) { toast('Duplicate failed', 'error'); return; }
   toast('Newsletter duplicated', 'success');
   state.dbNewsletters = await loadNewslettersFromDB();
   render();
 }
+
+async function moveNewsletterToPublication(id, pubId) {
+  if (pubId === '__cur' || !sb || !state.user) return; // no-op if they reselected the current pub
+  const scoped = await ensureNewslettersCapability();
+  if (!scoped) { toast('Run the newsletters migration in Supabase to move issues between publications', 'warn'); return; }
+  const target = pubId || null; // '' = Default
+  const { error } = await sb.from('newsletters').update({ publication_id: target }).eq('id', id).eq('user_id', state.user.id);
+  if (error) { toast('Move failed: ' + error.message, 'error'); return; }
+  state.dbNewsletters = await loadNewslettersFromDB(); // it leaves the current publication's list
+  render();
+  const name = (target ? state.publications.find(p => p.id === target)?.name : (state.defaultPublicationName || 'Default')) || 'publication';
+  toast(`Moved to "${name}"`, 'success');
+}
+window.moveNewsletterToPublication = moveNewsletterToPublication;
 
 async function deleteNewsletter(id) {
   const nl = state.dbNewsletters.find(n => n.id === id);
@@ -5013,8 +5039,9 @@ async function switchPublication(id) {
   } else {
     applyCurrentPublication();
   }
-  // Reload sources scoped to the new publication
+  // Reload sources + newsletters scoped to the new publication
   state.sources = await loadSourcesFromDB();
+  state.dbNewsletters = await loadNewslettersFromDB();
   // Fetch articles for the newly loaded sources in the background
   autoFetchSources();
   render();
@@ -5260,18 +5287,20 @@ async function saveNewsletter() {
   };
   try {
     if (state.newsletterId) {
+      // Update: never change which publication a newsletter belongs to.
       const { error } = await sb.from('newsletters').update(payload).eq('id', state.newsletterId);
       if (error) throw error;
     } else {
-      const { data: row, error } = await sb.from('newsletters').insert(payload).select('id').single();
+      // New newsletter: stamp it with the active publication so it stays separate.
+      const scoped = await ensureNewslettersCapability();
+      const insertPayload = scoped ? { ...payload, publication_id: state.currentPublicationId || null } : payload;
+      const { data: row, error } = await sb.from('newsletters').insert(insertPayload).select('id').single();
       if (error) throw error;
-      // Migrate the "new" draft to the freshly-minted id so a refresh still recovers it
-      clearBuilderDraft('new');
+      clearBuilderDraft('new'); // migrate the "new" draft to the freshly-minted id
       state.newsletterId = row.id;
       try { localStorage.setItem('lwai_open_nl', row.id); } catch (e) {}
     }
-    // DB is now authoritative for everything saved — drop the local recovery draft
-    clearBuilderDraft();
+    clearBuilderDraft(); // DB is now authoritative — drop the local recovery draft
     setSaveIndicator('saved');
   } catch (e) {
     console.error('Save error:', e);
@@ -5280,14 +5309,27 @@ async function saveNewsletter() {
   state.saving = false;
 }
 
+// Detect once whether the newsletters table has the publication_id column.
+async function ensureNewslettersCapability() {
+  if (state.newslettersPubScoped !== null) return state.newslettersPubScoped;
+  if (!sb || !state.user) { state.newslettersPubScoped = false; return false; }
+  const { error } = await sb.from('newsletters')
+    .select('id').eq('user_id', state.user.id).is('publication_id', null).limit(1);
+  state.newslettersPubScoped = !error; // error => column missing
+  return state.newslettersPubScoped;
+}
+
 async function loadNewslettersFromDB() {
   if (!sb || !state.user) return [];
-  const { data, error } = await sb
-    .from('newsletters')
+  const pubId = state.currentPublicationId || null;
+  const scoped = await ensureNewslettersCapability();
+  let query = sb.from('newsletters')
     .select('id, title, subject, status, created_at, updated_at')
     .eq('user_id', state.user.id)
     .order('updated_at', { ascending: false })
-    .limit(30);
+    .limit(50);
+  if (scoped) query = pubId ? query.eq('publication_id', pubId) : query.is('publication_id', null);
+  const { data, error } = await query;
   if (error) { console.error('Load newsletters error:', error); return []; }
   return data.map(nl => ({
     id: nl.id,

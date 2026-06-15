@@ -69,11 +69,15 @@ create table if not exists newsletters (
   sections            jsonb default '{"topStories":[],"leadStory":[],"quickHits":[],"cta":[]}',
   top_stories_content text default '',
   prompts             jsonb default '{}',
+  publication_id      uuid references publications(id) on delete set null, -- NULL = Default publication
   status              text default 'draft' check (status in ('draft','review','approved','sent','scheduled')),
   created_at          timestamptz default now(),
   updated_at          timestamptz default now()
 );
 alter table newsletters add column if not exists subject_lines jsonb default '[]';
+-- Per-publication newsletter separation (safe on older tables).
+-- on delete set null: deleting a publication keeps its newsletters (moved to Default).
+alter table newsletters add column if not exists publication_id uuid references publications(id) on delete set null;
 
 -- ── sources ───────────────────────────────────────────────────────────────────
 create table if not exists sources (
