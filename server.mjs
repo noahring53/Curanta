@@ -1138,14 +1138,37 @@ Examples:
     : ['quick-hits', 'top-stories'].includes(action) ? 1600
     : 1200;
 
+  const params = {
+    model: action === 'lead-story' ? MODEL_LEAD : MODEL,
+    max_tokens: maxTokens,
+    temperature: TEMPERATURE[action] ?? 0.7,
+    system: p.system,
+    messages: [{ role: 'user', content: p.user }],
+  };
+
+  // Streaming path: send text deltas via SSE as the model writes them.
+  if (req.body.stream === true) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // ask proxies not to buffer
+    res.flushHeaders?.();
+    try {
+      const stream = anthropic.messages.stream(params);
+      stream.on('text', (delta) => { res.write(`data: ${JSON.stringify({ delta })}\n\n`); });
+      await stream.finalMessage();
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (e) {
+      console.error('Anthropic stream error:', e.message);
+      res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+      res.end();
+    }
+    return;
+  }
+
   try {
-    const message = await anthropic.messages.create({
-      model: action === 'lead-story' ? MODEL_LEAD : MODEL,
-      max_tokens: maxTokens,
-      temperature: TEMPERATURE[action] ?? 0.7,
-      system: p.system,
-      messages: [{ role: 'user', content: p.user }],
-    });
+    const message = await anthropic.messages.create(params);
     return res.json({ result: message.content[0].text });
   } catch (e) {
     console.error('Anthropic error:', e.message);

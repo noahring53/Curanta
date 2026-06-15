@@ -2653,9 +2653,27 @@ async function generateLeadStory(sectionId) {
   if (!sources.length) { toast('Add at least one article first', 'warn'); return; }
   entry.loading = true; entry.editing = false;
   refreshSectionContent(sectionId);
+  const opts = { prompt: effectivePrompt(sectionId), contents: sources };
   try {
     await hydrateAll(sources); // ensure full source text before synthesizing
-    entry.content = await callAI(action, sources[0], { prompt: effectivePrompt(sectionId), contents: sources });
+
+    // Live-render the text as it streams in. First token swaps the skeleton for
+    // the story block; later tokens update just the content node (no full re-render).
+    let first = true;
+    const onDelta = (text) => {
+      entry.content = text;
+      if (first) { first = false; entry.loading = false; refreshSectionContent(sectionId); }
+      else { const el = document.querySelector(`#story-${entry.id} .story-content`); if (el) el.innerHTML = formatContent(text); }
+    };
+
+    try {
+      entry.content = await callAIStream(action, sources[0], opts, onDelta);
+    } catch (streamErr) {
+      if (['subscription_required', 'generation_limit'].includes(streamErr.message)) throw streamErr;
+      // Streaming hiccup — fall back to the proven non-streaming path so generation never breaks
+      console.warn('Streaming failed, falling back:', streamErr.message);
+      entry.content = await callAI(action, sources[0], opts);
+    }
     toast(`${noun.charAt(0).toUpperCase() + noun.slice(1)} generated from ${sources.length} article${sources.length === 1 ? '' : 's'}`, 'success');
   } catch (e) {
     if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
@@ -4172,6 +4190,60 @@ async function callAI(action, content, options = {}) {
     throw new Error(data.error || 'AI request failed');
   }
   return data.result;
+}
+
+// Streaming variant: invokes onDelta(fullTextSoFar) as text arrives and returns
+// the final text. Falls back gracefully to a single JSON result in mock mode.
+// Callers should catch errors and fall back to callAI() for robustness.
+async function callAIStream(action, content, options = {}, onDelta) {
+  const authToken = await getAuthToken();
+  const res = await fetch('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action,
+      content,
+      contents: options.contents || [],
+      tone: state.tone,
+      prompt: options.prompt || '',
+      brandVoice: state.brandVoice,
+      audienceAvatar: state.audienceAvatar,
+      userId: state.user?.id || '',
+      authToken,
+      stream: true,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    if (data.error === 'subscription_required') { showSubscribeModal(); throw new Error('subscription_required'); }
+    if (data.error === 'generation_limit') { toast(data.message || 'Monthly generation limit reached', 'error'); throw new Error('generation_limit'); }
+    throw new Error(data.error || 'AI request failed');
+  }
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('text/event-stream') || !res.body) {
+    // Mock mode or a non-streaming response — single JSON result
+    const data = await res.json();
+    if (data.result && onDelta) onDelta(data.result);
+    return data.result || '';
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '', full = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const frames = buf.split('\n\n');
+    buf = frames.pop() || '';
+    for (const frame of frames) {
+      const line = frame.trim();
+      if (!line.startsWith('data:')) continue;
+      let data; try { data = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (data.delta) { full += data.delta; onDelta && onDelta(full); }
+      else if (data.error) { throw new Error(data.error); }
+    }
+  }
+  return full;
 }
 
 // ── DESIGN PANEL ──────────────────────────────────────────────────────────────
