@@ -344,25 +344,32 @@ function handleClick(e) {
     case 'save-section-layout': {
       const raw = document.getElementById('sections-setup-input')?.value || '';
       const sections = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-        .map(name => ({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), name }));
+        .map(name => ({
+          id: 'custom_' + uid(),
+          name,
+          type: inferSectionType(name), // best-guess; user can adjust the dropdown after
+        }));
       if (!sections.length) { toast('Enter at least one section name', 'warn'); break; }
       setUserSections(sections);
-      toast(`${sections.length} section${sections.length === 1 ? '' : 's'} saved`, 'success');
+      toast(`Template saved — new newsletters will start with these ${sections.length} sections`, 'success');
       break;
     }
+    case 'add-section-default': addSectionDefault(); break;
+    case 'remove-section-default': removeSectionDefault(d.id); break;
     case 'import-builder-sections': {
       const secs = state.newsletter.sectionOrder
-        .map(id => ({ id, name: state.newsletter.sectionMeta[id]?.name || id }));
+        .map(id => ({ id, name: state.newsletter.sectionMeta[id]?.name || id, type: state.newsletter.sectionMeta[id]?.type || 'generic' }));
       if (!secs.length) { toast('No sections in current newsletter', 'warn'); break; }
       setUserSections(secs);
-      // Also capture the full layout (types + prompts) so new newsletters start with it
-      saveSectionLayoutAsDefault();
+      toast('Imported from builder — these are now your template', 'success');
       break;
     }
     case 'reset-section-layout': {
-      if (!confirm('Clear all section defaults? Your saved prompts will remain but the section list will be reset.')) break;
-      setUserSections([]);
-      toast('Section layout reset', 'success');
+      if (!confirm('Clear your section template? New newsletters will fall back to the standard layout.')) break;
+      if (state.defaultPrompts) { delete state.defaultPrompts._layout; delete state.defaultPrompts._sections; }
+      scheduleSettingsSave();
+      render();
+      toast('Template reset to standard', 'success');
       break;
     }
     case 'toggle-feed':     toggleFeed(d.feedId); break;
@@ -2067,43 +2074,57 @@ function renderSettingsPage() {
       ${(() => {
         const userSections = getUserSections();
         const hasBuilderSections = state.newsletter.sectionOrder?.length > 0;
+        const typeOpts = [
+          ['briefing', 'Today\'s Briefing (bulleted list)'],
+          ['lead', 'Lead Story (long form)'],
+          ['hits', 'Quick Hits (emoji bullets)'],
+          ['cta', 'CTA / Sponsor'],
+          ['generic', 'Generic'],
+        ];
         return `<div class="settings-section">
-        <div class="settings-section-title">Section Defaults${canUsePubs() ? ` <span style="font-size:11px;font-weight:600;color:var(--accent);background:var(--bg-3);padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px">📰 ${escHtml(currentPublicationName())}</span>` : ''}</div>
-        <div class="settings-section-sub">Describe each section's AI instructions — pre-filled on every new newsletter so you never start from scratch.${canUsePubs() ? ' These section descriptions are unique to <strong>' + escHtml(currentPublicationName()) + '</strong>; switch publications to give another newsletter its own.' : ''}</div>
+        <div class="settings-section-title">Section Template${canUsePubs() ? ` <span style="font-size:11px;font-weight:600;color:var(--accent);background:var(--bg-3);padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px">📰 ${escHtml(currentPublicationName())}</span>` : ''}</div>
+        <div class="settings-section-sub">These sections <strong>are</strong> your builder template — every new newsletter${canUsePubs() ? ' in <strong>' + escHtml(currentPublicationName()) + '</strong>' : ''} starts with exactly these sections, in this order, with these prompts pre-filled. Edit here and the builder follows.</div>
         ${userSections.length === 0 ? `
         <div style="padding:28px 24px;border:1px dashed var(--border-md);border-radius:var(--r-md);margin-top:16px;text-align:center">
           <div style="font-size:28px;margin-bottom:10px">📋</div>
-          <div style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:6px">Define your newsletter's sections first</div>
-          <div style="font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:20px;max-width:400px;margin-inline:auto">
-            Enter the names of your sections, one per line — e.g. "Today's Briefing", "Lead Story", "Quick Hits", "Sponsor".<br>
-            Or import them directly from the builder.
+          <div style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:6px">Build your newsletter template</div>
+          <div style="font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:20px;max-width:420px;margin-inline:auto">
+            Enter your section names, one per line. We'll guess each section's style (you can change it after), and every new newsletter will start from this template.
           </div>
           <textarea id="sections-setup-input" class="input" rows="5"
             style="width:100%;max-width:400px;display:block;margin:0 auto 14px;text-align:left;font-size:13px;resize:vertical"
             placeholder="Today's Briefing&#10;Lead Story&#10;Quick Hits&#10;Sponsor / CTA"></textarea>
           <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-            <button class="btn btn-primary" data-action="save-section-layout">Save sections</button>
-            ${hasBuilderSections ? `<button class="btn btn-outline" data-action="import-builder-sections">Import from builder</button>` : ''}
+            <button class="btn btn-primary" data-action="save-section-layout">Create template</button>
+            ${hasBuilderSections ? `<button class="btn btn-outline" data-action="import-builder-sections">Use current builder sections</button>` : ''}
           </div>
         </div>
         ` : `
         <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 16px">
-          <div style="font-size:12px;color:var(--text-3)">${userSections.length} section${userSections.length === 1 ? '' : 's'} configured</div>
+          <div style="font-size:12px;color:var(--text-3)">${userSections.length} section${userSections.length === 1 ? '' : 's'} · new newsletters start here</div>
           <div style="display:flex;gap:6px">
             ${hasBuilderSections ? `<button class="btn btn-outline btn-sm" data-action="import-builder-sections">Sync from builder</button>` : ''}
             <button class="btn btn-ghost btn-sm" data-action="reset-section-layout" style="color:var(--red)">Reset</button>
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:20px">
-          ${userSections.map(s => `
-          <div>
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px">${escHtml(s.name)}</div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          ${userSections.map((s, i) => `
+          <div style="border:1px solid var(--border-md);border-radius:var(--r-md);padding:12px 14px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <span style="font-size:11px;color:var(--text-3);width:18px">${i + 1}.</span>
+              <span style="flex:1;font-size:13px;font-weight:600">${escHtml(s.name)}</span>
+              <select class="input input-sm" onchange="setSectionDefaultType('${s.id}', this.value)" title="Content style" style="width:auto;font-size:11px;padding:3px 6px">
+                ${typeOpts.map(([v, lbl]) => `<option value="${v}" ${s.type === v ? 'selected' : ''}>${lbl}</option>`).join('')}
+              </select>
+              <button class="btn-icon" data-action="remove-section-default" data-id="${s.id}" title="Remove from template" style="color:var(--red);font-size:14px">🗑</button>
+            </div>
             <textarea class="input default-prompt-input" data-type="${s.id}" rows="2"
               style="width:100%;resize:vertical;font-size:12px"
-              placeholder="e.g. Write each point as a punchy single sentence. Lead with the most surprising number."
+              placeholder="Default AI instructions for this section (optional) — e.g. Lead with the hardest number, one sentence each."
             >${escHtml(state.defaultPrompts?.[s.id] || '')}</textarea>
           </div>`).join('')}
-        </div>`}
+        </div>
+        <button class="btn btn-outline btn-sm" data-action="add-section-default" style="margin-top:14px">+ Add a section</button>`}
       </div>`;
       })()}
 
@@ -3560,15 +3581,67 @@ function effectivePrompt(sectionId) {
   return state.defaultPrompts?.[typeToKey[type] || 'generic'] || '';
 }
 
+// The section-defaults "template": an ordered list of {id, name, type} plus a
+// per-section prompt. Stored as defaultPrompts._layout — the SAME thing the
+// builder consumes in resetNewsletter, so editing it here IS editing the builder
+// template (new newsletters start from exactly these sections).
 function getUserSections() {
-  return state.defaultPrompts?._sections || [];
+  const dp = state.defaultPrompts || {};
+  if (dp._layout?.order?.length) {
+    return dp._layout.order.map(id => ({
+      id,
+      name: dp._layout.meta?.[id]?.name || id,
+      type: dp._layout.meta?.[id]?.type || 'generic',
+    }));
+  }
+  // Legacy list with no types — surface it so nothing is lost
+  return (dp._sections || []).map(s => ({ id: s.id, name: s.name, type: 'generic' }));
 }
 
+// Best-guess a section's content type from its name so users don't have to set it.
+function inferSectionType(name) {
+  const n = (name || '').toLowerCase();
+  if (/brief|today|top stor|digest|round-?up|headlines|the rundown/.test(n)) return 'briefing';
+  if (/lead|feature|main story|deep ?dive|spotlight|cover/.test(n)) return 'lead';
+  if (/quick|hits|bites|bullet|short|tl;?dr|rapid|in brief/.test(n)) return 'hits';
+  if (/cta|sponsor|call to action|promo|\bad\b|advert|support us|subscribe|upgrade/.test(n)) return 'cta';
+  return 'generic';
+}
+
+// Persist a template (list of {id,name,type}) as the builder default for this publication.
 function setUserSections(sections) {
   if (!state.defaultPrompts) state.defaultPrompts = {};
-  state.defaultPrompts._sections = sections;
+  const order = sections.map(s => s.id);
+  const meta = {};
+  for (const s of sections) meta[s.id] = { name: s.name, type: s.type || 'generic' };
+  const prevPrompts = state.defaultPrompts._layout?.prompts || {};
+  const prompts = {};
+  for (const s of sections) prompts[s.id] = state.defaultPrompts[s.id] || prevPrompts[s.id] || '';
+  state.defaultPrompts._layout = { order, meta, prompts };
+  state.defaultPrompts._sections = sections.map(s => ({ id: s.id, name: s.name })); // legacy mirror
   scheduleSettingsSave();
   render();
+}
+
+function setSectionDefaultType(id, type) {
+  if (!state.defaultPrompts?._layout?.meta?.[id]) return;
+  state.defaultPrompts._layout.meta[id].type = type;
+  scheduleSettingsSave();
+}
+window.setSectionDefaultType = setSectionDefaultType;
+
+function addSectionDefault() {
+  const name = (window.prompt('New section name (e.g. "All Things Camden"):') || '').trim();
+  if (!name) return;
+  const sections = getUserSections();
+  sections.push({ id: 'custom_' + uid(), name, type: inferSectionType(name) });
+  setUserSections(sections);
+}
+
+function removeSectionDefault(id) {
+  const sections = getUserSections().filter(s => s.id !== id);
+  if (!sections.length) { toast('Keep at least one section in your template', 'warn'); return; }
+  setUserSections(sections);
 }
 
 async function applyPrompt(sectionId) {
@@ -5404,8 +5477,9 @@ function resetNewsletter() {
       const m = layout.meta?.[id] || { name: id, type: 'generic' };
       meta[id] = { name: m.name || id, type: m.type || 'generic' };
       sections[id] = [];
-      // Prefer the layout's saved prompt, then a per-section default, then the type default
-      prompts[id] = layout.prompts?.[id] || dp[id] || dp[typeDefaultKey(meta[id].type)] || '';
+      // Prefer the live-edited prompt (dp[id], what the Settings textarea writes),
+      // then the layout snapshot, then the type default.
+      prompts[id] = dp[id] || layout.prompts?.[id] || dp[typeDefaultKey(meta[id].type)] || '';
     }
     state.newsletter = {
       title: 'Untitled Newsletter', subject: '', previewText: '', subjectLines: [],
