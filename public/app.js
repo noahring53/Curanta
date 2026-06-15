@@ -2552,7 +2552,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
       ` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
-      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
+      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -2723,7 +2723,7 @@ function renderLeadSection(sectionId, label) {
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="${cfg.promptPlaceholder}">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
-      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
+      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -2827,7 +2827,7 @@ function renderSection(sectionId, label, type = 'hits') {
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt for this issue…">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
-      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Remove section" style="color:var(--red);padding:2px 6px">×</button>` : ''}
+      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -4677,13 +4677,29 @@ function confirmAddSection() {
 }
 
 function removeSection(sectionId) {
-  if (state.newsletter.sectionOrder.length <= 1) { toast('Must have at least one section', 'warn'); return; }
+  if (state.newsletter.sectionOrder.length <= 1) { toast('A newsletter needs at least one section', 'warn'); return; }
+  const meta = state.newsletter.sectionMeta[sectionId] || {};
+  const name = meta.name || 'this section';
+  const arr = state.newsletter.sections[sectionId] || [];
+
+  // Does this section have content worth warning about?
+  let hasContent = arr.length > 0;
+  if (meta.type === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
+  if (isSynthType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
+
+  const msg = hasContent
+    ? `Delete the "${name}" section? Its content in this issue will be removed (this won't affect your saved default layout unless you re-save it).`
+    : `Delete the "${name}" section?`;
+  if (!confirm(msg)) return;
+
   state.newsletter.sectionOrder = state.newsletter.sectionOrder.filter(id => id !== sectionId);
   delete state.newsletter.sections[sectionId];
   delete state.newsletter.sectionMeta[sectionId];
   delete state.newsletter.prompts[sectionId];
+  if (meta.type === 'briefing') state.newsletter.topStoriesContent = ''; // briefing output lives here
   render();
   scheduleSave();
+  toast(`"${name}" section deleted`, 'info');
 }
 
 function inlineRenameSection(sectionId) {
