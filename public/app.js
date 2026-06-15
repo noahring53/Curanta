@@ -266,7 +266,9 @@ async function navigate(view, params = {}) {
     if (params.id && params.id !== state.newsletterId) {
       await loadBuilderData(params.id);
     } else if (!params.id) {
+      clearBuilderDraft('new'); // discard any stale unsaved draft so we start clean from the template
       resetNewsletter();
+      cacheBuilderDraft();      // snapshot the fresh template newsletter as the 'new' draft
       if (sb && state.user) state.sources = await loadSourcesFromDB();
     }
     autoFetchSources();
@@ -5463,10 +5465,23 @@ function typeDefaultKey(type) {
   return ({ briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta' })[type] || 'generic';
 }
 
+// The active publication's saved section template. Falls back to the per-publication
+// localStorage settings cache so a new newsletter uses it even if state was reset.
+function getSectionLayout() {
+  const dp = state.defaultPrompts || {};
+  if (dp._layout?.order?.length) return dp._layout;
+  try {
+    const raw = localStorage.getItem(settingsLSKey());
+    const c = raw ? JSON.parse(raw) : null;
+    if (c?.defaultPrompts?._layout?.order?.length) return c.defaultPrompts._layout;
+  } catch (e) {}
+  return null;
+}
+
 function resetNewsletter() {
   const dp = state.defaultPrompts || {};
   state.newsletterId = null;
-  const layout = dp._layout;
+  const layout = getSectionLayout();
 
   if (layout && Array.isArray(layout.order) && layout.order.length) {
     // Start new newsletters from the user's saved section layout (per publication)
