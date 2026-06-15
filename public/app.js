@@ -4629,42 +4629,83 @@ window.sectionDrop = sectionDrop;
 // ── User settings (brand voice, tone, color) ──────────────────────────────────
 let _settingsTimer = null;
 function scheduleSettingsSave() {
+  cacheSettingsLocally(); // mirror immediately so settings can never be lost to a DB hiccup
   if (!sb || !state.user) return;
   clearTimeout(_settingsTimer);
   _settingsTimer = setTimeout(saveUserSettings, 1500);
 }
 
+// Local backup of voice / audience / tone / section-default prompts, keyed per
+// publication. This is a safety net: even if a DB write fails (e.g. a missing
+// column rejects the whole upsert), your prompts survive a reload on this browser.
+function settingsLSKey() { return `lwai_settings_${state.currentPublicationId || 'default'}`; }
+
+function cacheSettingsLocally() {
+  try {
+    localStorage.setItem(settingsLSKey(), JSON.stringify({
+      brandVoice: state.brandVoice || '',
+      brandVoiceSamples: state.brandVoiceSamples || '',
+      audienceAvatar: state.audienceAvatar || '',
+      voiceUrls: state.voiceUrls || [],
+      tone: state.tone || 'punchy-executive',
+      brandColor: state.design.primaryColor || '#6366f1',
+      defaultPrompts: state.defaultPrompts || {},
+      ts: Date.now(),
+    }));
+  } catch (e) { /* storage full/unavailable */ }
+}
+
+// Backfill anything the DB didn't provide (recovers from a failed/partial save).
+function restoreSettingsFromCache() {
+  try {
+    const raw = localStorage.getItem(settingsLSKey());
+    if (!raw) return;
+    const c = JSON.parse(raw);
+    if (!state.brandVoice && c.brandVoice)               state.brandVoice        = c.brandVoice;
+    if (!state.brandVoiceSamples && c.brandVoiceSamples) state.brandVoiceSamples = c.brandVoiceSamples;
+    if (!state.audienceAvatar && c.audienceAvatar)       state.audienceAvatar    = c.audienceAvatar;
+    if ((!state.voiceUrls || !state.voiceUrls.length) && c.voiceUrls?.length) state.voiceUrls = c.voiceUrls;
+    if (c.tone && (!state.tone || state.tone === 'punchy-executive')) state.tone = c.tone;
+    // DB-loaded prompts win; cache fills any keys the DB was missing
+    if (c.defaultPrompts) state.defaultPrompts = { ...c.defaultPrompts, ...(state.defaultPrompts || {}) };
+  } catch (e) { /* ignore */ }
+}
+
 async function saveUserSettings() {
+  cacheSettingsLocally(); // always mirror first — DB write can never lose your prompts
   if (!sb || !state.user) return;
 
   if (state.currentPublicationId) {
     // A non-default publication is active. Persist the brand-voice/audience/tone/prompts
     // ONLY to that publication's row — never to user_settings (which is the Default's store).
-    // This prevents one publication's voice from overwriting another's.
     const pubFields = {
       brand_voice:     state.brandVoice      || '',
       audience_avatar: state.audienceAvatar  || '',
       tone:            state.tone            || 'punchy-executive',
       default_prompts: state.defaultPrompts  || {},
     };
-    const { error } = await sb.from('publications').update(pubFields)
+    let { error } = await sb.from('publications').update(pubFields)
       .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
-    if (error) console.error('Publication settings save error:', error);
-    // Keep local cache in sync
+    if (error) {
+      // Retry with just the two most essential prompt fields in case a column is missing
+      const { error: e2 } = await sb.from('publications')
+        .update({ brand_voice: pubFields.brand_voice, default_prompts: pubFields.default_prompts })
+        .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
+      if (e2) console.error('Publication settings save failed (cached locally):', e2.message);
+    }
     const idx = state.publications.findIndex(p => p.id === state.currentPublicationId);
     if (idx >= 0) state.publications[idx] = { ...state.publications[idx], ...pubFields };
 
-    // Still persist account-level (non-publication) fields to user_settings.
-    const { error: acctErr } = await sb.from('user_settings').update({
+    // Account-level field — best effort, never blocks the prompt save above.
+    await sb.from('user_settings').update({
       brand_color: state.design.primaryColor || '#6366f1',
       updated_at: new Date().toISOString(),
-    }).eq('user_id', state.user.id);
-    if (acctErr) console.error('Account settings save error:', acctErr);
+    }).eq('user_id', state.user.id).then(({ error: e }) => { if (e) console.warn('brand_color save skipped:', e.message); });
     return;
   }
 
   // Default publication active — its settings live in user_settings.
-  const { error } = await sb.from('user_settings').upsert({
+  const full = {
     user_id: state.user.id,
     brand_voice: state.brandVoice || '',
     brand_voice_samples: state.brandVoiceSamples || '',
@@ -4674,8 +4715,23 @@ async function saveUserSettings() {
     brand_color: state.design.primaryColor || '#6366f1',
     default_prompts: state.defaultPrompts || {},
     updated_at: new Date().toISOString(),
-  }, { onConflict: 'user_id' });
-  if (error) console.error('Settings save error:', error);
+  };
+  const { error } = await sb.from('user_settings').upsert(full, { onConflict: 'user_id' });
+  if (error) {
+    // A missing column rejects the WHOLE upsert (this is what wiped brand voice before).
+    // Retry with only the long-standing essential columns so prompts always persist.
+    console.warn('Full settings save failed, retrying essentials only:', error.message);
+    const essential = {
+      user_id: state.user.id,
+      brand_voice: state.brandVoice || '',
+      audience_avatar: state.audienceAvatar || '',
+      tone: state.tone || 'punchy-executive',
+      default_prompts: state.defaultPrompts || {},
+      updated_at: new Date().toISOString(),
+    };
+    const { error: e2 } = await sb.from('user_settings').upsert(essential, { onConflict: 'user_id' });
+    if (e2) console.error('Essential settings save also failed (cached locally):', e2.message);
+  }
 }
 
 async function loadUserSettings() {
@@ -4685,7 +4741,7 @@ async function loadUserSettings() {
     .select('*')
     .eq('user_id', state.user.id)
     .single();
-  if (error || !data) return;
+  if (error || !data) { restoreSettingsFromCache(); return; } // recover from local backup if DB has nothing
   if (data.brand_voice)              state.brandVoice           = data.brand_voice;
   if (data.brand_voice_samples)      state.brandVoiceSamples    = data.brand_voice_samples;
   if (data.audience_avatar)          state.audienceAvatar       = data.audience_avatar;
@@ -4698,6 +4754,9 @@ async function loadUserSettings() {
   if (data.grandfathered)                state.grandfathered        = data.grandfathered;
   if (data.generations_this_month != null) state.generationsThisMonth = data.generations_this_month;
   if (data.trial_ends_at)                 state.trialEndsAt          = data.trial_ends_at;
+
+  // Backfill anything the DB didn't return (recovers from a prior failed save)
+  restoreSettingsFromCache();
 
   // Load publications for multi-pub-capable users, then restore + apply the last active publication
   if (data.grandfathered || (data.subscription_plan === 'multi')) {
@@ -4727,6 +4786,7 @@ function applyCurrentPublication() {
   state.audienceAvatar  = pub.audience_avatar  || '';
   state.tone            = pub.tone             || state.tone;
   state.defaultPrompts  = pub.default_prompts  || {};
+  restoreSettingsFromCache(); // backfill this publication's prompts if the DB row was incomplete
 }
 
 function currentPublicationName() {
@@ -4844,7 +4904,10 @@ async function switchPublication(id) {
       state.audienceAvatar = data.audience_avatar  || '';
       state.tone           = data.tone             || 'punchy-executive';
       state.defaultPrompts = data.default_prompts  || {};
+    } else {
+      state.brandVoice = ''; state.audienceAvatar = ''; state.defaultPrompts = {};
     }
+    restoreSettingsFromCache(); // backfill Default's prompts if the DB row was incomplete
   } else {
     applyCurrentPublication();
   }
