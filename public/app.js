@@ -2574,6 +2574,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
         <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
       ` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      ${sectionTypePickerHtml(sectionId, 'briefing')}
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -2745,6 +2746,7 @@ function renderLeadSection(sectionId, label) {
     <div class="section-prompt-wrap">
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="${cfg.promptPlaceholder}">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      ${sectionTypePickerHtml(sectionId, cfg.type)}
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -2849,6 +2851,7 @@ function renderSection(sectionId, label, type = 'hits') {
     <div class="section-prompt-wrap">
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt for this issue…">` : ''}
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      ${sectionTypePickerHtml(sectionId, type)}
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -2870,6 +2873,53 @@ function refreshTopStoriesSection() {
   else render();
   setupDropZones();
 }
+
+// Renders the inline dropdown that lets you change a section's content style.
+function sectionTypePickerHtml(sectionId, currentType) {
+  const opts = [
+    ['briefing', "Today's Briefing"],
+    ['lead',     'Lead Story'],
+    ['hits',     'Quick Hits'],
+    ['cta',      'CTA / Sponsor'],
+    ['generic',  'Generic'],
+  ];
+  return `<select class="input input-sm section-type-picker"
+    title="Change this section's content style"
+    onchange="changeSectionType('${sectionId}', this.value)"
+    style="font-size:11px;padding:3px 6px;cursor:pointer;max-width:140px">
+    ${opts.map(([v, lbl]) => `<option value="${v}" ${currentType === v ? 'selected' : ''}>${lbl}</option>`).join('')}
+  </select>`;
+}
+
+// Change a section's content type with content-loss protection. Different types
+// store content in different shapes (briefing → topStoriesContent string; synth
+// types → a single _lead entry with _sources; everything else → per-article
+// entries) so changing means clearing whatever doesn't transfer.
+function changeSectionType(sectionId, newType) {
+  const meta = state.newsletter.sectionMeta[sectionId];
+  if (!meta || meta.type === newType) return;
+
+  const oldType = meta.type || 'generic';
+  const arr = state.newsletter.sections[sectionId] || [];
+  let hasContent = arr.length > 0;
+  if (oldType === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
+  if (isSynthType(oldType)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
+
+  if (hasContent && !confirm(`Change "${meta.name}" to a different style?\n\nThis section's current content doesn't transfer between styles and will be cleared. Your sources and brand voice are unaffected.`)) {
+    // Revert the dropdown to the old value
+    const sel = document.querySelector(`#section-${sectionId} .section-type-picker`);
+    if (sel) sel.value = oldType;
+    return;
+  }
+
+  state.newsletter.sectionMeta[sectionId].type = newType;
+  state.newsletter.sections[sectionId] = [];
+  if (oldType === 'briefing') state.newsletter.topStoriesContent = '';
+  refreshSection(sectionId);
+  scheduleSave();
+  toast(`"${meta.name}" is now a ${({briefing:"briefing", lead:"lead story", hits:"quick hits", cta:"CTA", generic:"generic"})[newType]} section`, 'success');
+}
+window.changeSectionType = changeSectionType;
 
 function removeTopStory(articleId) {
   const briefingId = state.newsletter.sectionOrder.find(id => state.newsletter.sectionMeta[id]?.type === 'briefing') || 'topStories';
