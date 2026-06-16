@@ -5465,15 +5465,42 @@ function typeDefaultKey(type) {
   return ({ briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta' })[type] || 'generic';
 }
 
-// The active publication's saved section template. Falls back to the per-publication
-// localStorage settings cache so a new newsletter uses it even if state was reset.
+// The active publication's saved section template. Looks in three places, in order:
+//   1. state.defaultPrompts._layout — the modern template format
+//   2. state.defaultPrompts._sections — the legacy list (no types); synthesized into a layout
+//   3. The per-publication localStorage settings cache (handles state resets)
+// Whatever Settings shows, this returns — so new newsletters always match.
+function synthLayoutFromLegacy(dp) {
+  const list = dp?._sections;
+  if (!Array.isArray(list) || !list.length) return null;
+  const order = list.map(s => s.id);
+  const meta = {};
+  const prompts = {};
+  for (const s of list) {
+    meta[s.id] = { name: s.name || s.id, type: inferSectionType(s.name || '') };
+    prompts[s.id] = dp[s.id] || '';
+  }
+  return { order, meta, prompts };
+}
+
 function getSectionLayout() {
   const dp = state.defaultPrompts || {};
   if (dp._layout?.order?.length) return dp._layout;
+  // Legacy list — synthesize a layout (auto-inferring types from names)
+  const synth = synthLayoutFromLegacy(dp);
+  if (synth) {
+    // Persist the upgrade so it's a proper template going forward
+    dp._layout = synth;
+    scheduleSettingsSave();
+    return synth;
+  }
+  // Last resort: read the per-publication settings cache
   try {
     const raw = localStorage.getItem(settingsLSKey());
     const c = raw ? JSON.parse(raw) : null;
     if (c?.defaultPrompts?._layout?.order?.length) return c.defaultPrompts._layout;
+    const cSynth = synthLayoutFromLegacy(c?.defaultPrompts);
+    if (cSynth) return cSynth;
   } catch (e) {}
   return null;
 }
