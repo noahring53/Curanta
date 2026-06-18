@@ -2589,12 +2589,18 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
       </div>` : `
       <div style="padding:10px 12px">
         ${articles.length > 0 ? `
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:${content ? '10px' : '0'}">
-          ${articles.map(a => `
-          <div style="display:flex;align-items:center;gap:5px;background:var(--bg-3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:11px">
-            <span style="color:var(--text-2)">${escHtml(a.source || a.title.slice(0,20))}</span>
-            <button style="background:none;border:none;cursor:pointer;color:var(--text-3);font-size:13px;padding:0;line-height:1" data-action="remove-top-story" data-article-id="${a.id}">×</button>
-          </div>`).join('')}
+        <div style="margin-bottom:${content ? '10px' : '0'}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-3);margin-bottom:6px">${articles.length} ${articles.length === 1 ? 'story' : 'stories'} staged for the briefing</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${articles.map((a, i) => `
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-3);border:1px solid var(--border);border-radius:8px;font-size:12px">
+              <span style="font-size:10px;color:var(--text-3);width:14px;flex-shrink:0">${i + 1}.</span>
+              <span style="font-size:10px;font-weight:700;color:var(--accent);white-space:nowrap;flex-shrink:0">${escHtml(a.source || 'Source')}</span>
+              <span style="flex:1;min-width:0;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(a.title || '')}">${escHtml(a.title || '(untitled)')}</span>
+              ${a.url ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--text-3);text-decoration:none;flex-shrink:0" title="Open original">↗</a>` : ''}
+              <button style="background:none;border:none;cursor:pointer;color:var(--red);font-size:13px;padding:0 2px;line-height:1;flex-shrink:0" data-action="remove-top-story" data-article-id="${a.id}" title="Remove from briefing">×</button>
+            </div>`).join('')}
+          </div>
         </div>` : ''}
         ${content ? `
         <div class="top-stories-preview">${formatTopStories(content)}</div>

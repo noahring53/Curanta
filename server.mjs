@@ -722,10 +722,10 @@ ${combined.slice(0, 60000)}`,
 
 // ── AI tone descriptions ──────────────────────────────────────────────────────
 const TONES = {
-  'punchy-executive': 'You write like a sharp, no-fluff executive newsletter. Direct, confident, data-informed. Short sentences. No padding.',
-  'morning-brew': 'You write like Morning Brew: conversational, witty, and genuinely informative. Clever transitions, occasional dry humor. Friendly but never fluffy.',
-  'neutral-newsroom': 'You write in neutral AP-style journalistic prose. Facts first, zero hype, clear attribution. No opinions unless labeled.',
-  'sharp-political': 'You write with a sharp political newsletter voice. Punchy insider framing, urgency, strategic context. Readers feel they are getting the real story.',
+  'punchy-executive': 'You write like an editor at The Information or Stratechery: direct, evidence-led, comfortable with a specific take. Numbers and named sources do the heavy lifting. The reader is a senior operator who doesn\'t need anything explained twice.',
+  'morning-brew': 'You write like Morning Brew or Axios Markets: conversational and human, but the wit is dry, sparing, and always in service of a fact. Friendly without being chummy. Clever transitions earn their place by tying a real detail to the next one.',
+  'neutral-newsroom': 'You write in the voice of a senior Reuters or AP reporter. Facts first, attribution clear, no hype, no opinion unless labeled. The reader trusts you because you don\'t reach.',
+  'sharp-political': 'You write like Punchbowl, NOTUS, or a senior Politico Playbook contributor: insider context, named sources, specific procedural detail. Urgency comes from substance, not adjectives. No hot-takes — the reader is already informed.',
 };
 
 // Shared grounding rules injected into every content writer. This is the single
@@ -770,11 +770,11 @@ WHAT TO DO INSTEAD:
 // Per-action sampling temperature. Lower = more grounded/consistent (good for
 // factual synthesis); higher = more varied (good for creative headline work).
 const TEMPERATURE = {
-  'lead-story': 0.6,
-  'quick-hit': 0.5,
+  'lead-story': 0.45,   // lowered: keeps reporting voice steady; less florid flourish drift
+  'quick-hit': 0.45,
   'quick-hits': 0.5,
   'top-stories': 0.4,
-  'rewrite': 0.5,
+  'rewrite': 0.45,
   'summarize': 0.3,
   'cta': 0.7,
   'subject-line': 0.9,
@@ -971,6 +971,26 @@ FORMAT:
 - Place it in context. What's actually different about this moment versus before, supported by a specific detail or comparison.
 - If you have a take, make it. Own it as a claim. Don't lean on "some say" or "experts believe".
 - End with a specific forward-looking detail or the thing to watch — a date, a number, a named decision pending. NEVER end with a question, a pep-talk close, or a "this changes everything" flourish.
+- No exclamation marks. None. Ever.
+
+FORBIDDEN OPENINGS (these mark prose as AI on sight):
+- "In a [adjective] move/decision/development..."
+- "In a striking..." / "In a stunning..." / "In a major shift..."
+- "Amid [growing/mounting/rising]..."
+- "As [topic] continues to..."
+- "[Company] is making waves with..."
+- Any sentence that starts with a participle phrase setting the scene before the verb.
+
+VOICE EXAMPLE (don't copy the topic — match the cadence, attribution, and absence of flourish):
+
+  Anthropic raised $3.5 billion at a $61.5 billion valuation Monday, four people familiar with the round told The Information. Lightspeed led the round, which triples the company's price from a year ago and widens its lead over every other OpenAI competitor still raising at a fraction of that pace.
+  The deal closed two weeks after Anthropic shipped Claude 3.7, and roughly a week after Amazon committed an additional $4 billion outside the equity round. The two events are connected. Investors who saw the model's coding benchmarks moved from a $40 billion target to $61.5 billion in under a month, according to two people who saw the pitch.
+  That puts Anthropic at the same valuation OpenAI commanded eight months ago — except OpenAI has since raised at $157 billion. The gap between the two leaders is now bigger than the entire valuation of every other foundation-model startup combined.
+
+Notice what's NOT there: no subheads, no "Why it matters," no "Big picture," no "And here's the kicker," no rhetorical questions, no emotional adjectives. Just facts with attribution, a specific comparison, and an end that lands on a concrete number rather than a tidy moral.
+
+DELETE PASS (mandatory before finalizing):
+Re-read your draft. For every sentence, ask: does this carry a specific fact, number, attribution, named insight, or concrete comparison? If not, cut it. Long isn't bad; padding is. Three tight paragraphs beat six padded ones.
 ${hyperlinkRules}`;
 
       if (multi) {
