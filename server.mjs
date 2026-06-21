@@ -742,6 +742,13 @@ GROUNDING (facts):
 - If sources disagree on a fact, say so briefly rather than silently picking one.
 - Attribute meaningfully — name the outlet or the named source for any specific claim, the way a real reporter would.
 
+WHEN SOURCES ARE THIN — non-negotiable:
+- NEVER refuse the task. NEVER ask the user for more material. NEVER output messages like "I can only write accurate, sourced…" or "please provide more detail" or "I cannot do this without…". You always produce the requested output.
+- Treat the article TITLE as a reported fact in itself — it is a published claim by a real outlet. The outlet's NAME is valid attribution. The URL is valid for linking. The DATE in the URL or feed is a fact.
+- If a particular article has no body beyond the title, write that item in the form: "[Outlet] reports [the headline's specific claim], per [Outlet]" — short, attributed, no invention. That is correct journalism, not failure.
+- If only ONE item is thin, still produce ALL the items — never let one short source make you skip or refuse the others.
+- A short, accurately attributed line beats no output every time.
+
 RHYTHM (how it sounds):
 - Vary sentence length. Mix short with longer ones that build through a clause before landing. Monotone-punchy sounds robotic; so does monotone-flowing.
 - Vary how paragraphs open. Not every sentence starts with the subject.
@@ -1031,7 +1038,7 @@ FORMAT:
     'quick-hits': (() => {
       const items = contents.length ? contents : [content];
       const articleList = items.map((a, i) =>
-        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 500)}`
+        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 1500)}`
       ).join('\n\n');
       return {
         system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
@@ -1131,7 +1138,7 @@ Quote actual short phrases or patterns from the samples to make the profile conc
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
       const articleList = items.map((a, i) =>
-        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 400)}`
+        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 1500)}`
       ).join('\n\n');
       return {
         system: `${GROUNDING}

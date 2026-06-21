@@ -2683,6 +2683,21 @@ function getLeadEntry(sectionId, create = false) {
   return entry;
 }
 
+// Detects the rare case where the model returns a help-me / refusal message
+// instead of the requested content. Server prompt forbids this; this is the
+// client-side safety net so a retry with stricter instruction can recover.
+function looksLikeRefusal(text) {
+  if (!text) return false;
+  const head = text.trim().slice(0, 350).toLowerCase();
+  return (
+    /^i\s+(can|can't|cannot|will not|won't)\s+(only|write|produce|generate|create)/.test(head) ||
+    /\bi (?:cannot|can't|won't|will not)\s+(?:write|invent|fabricate|make up|produce)/.test(head) ||
+    /please (?:provide|share|supply)\s+(?:the|more|full)/.test(head) ||
+    /^(?:i'm sorry|sorry,? but|unfortunately,?)\b.*\b(?:cannot|can't|won't|unable)/.test(head) ||
+    /source material .* (?:contains? no|lacks?|missing|insufficient)/.test(head)
+  );
+}
+
 async function generateLeadStory(sectionId) {
   const { action, noun } = synthConfig(sectionId);
   const entry = getLeadEntry(sectionId, true);
@@ -2710,6 +2725,15 @@ async function generateLeadStory(sectionId) {
       // Streaming hiccup — fall back to the proven non-streaming path so generation never breaks
       console.warn('Streaming failed, falling back:', streamErr.message);
       entry.content = await callAI(action, sources[0], opts);
+    }
+    // Belt-and-suspenders: if the model returns a refusal/help-me message instead of content,
+    // retry once with an explicit "do not refuse" override. The server prompt already forbids
+    // this; this is the safety net.
+    if (looksLikeRefusal(entry.content)) {
+      console.warn('Model returned a refusal — retrying with stricter instruction');
+      const sternOpts = { ...opts, prompt: (opts.prompt ? opts.prompt + '\n\n' : '') +
+        'OVERRIDE: Do NOT refuse, do NOT ask for more information, do NOT mention thin source material. Use the titles as facts and attribute to the named outlet. Produce the requested output now.' };
+      entry.content = await callAI(action, sources[0], sternOpts);
     }
     toast(`${noun.charAt(0).toUpperCase() + noun.slice(1)} generated from ${sources.length} article${sources.length === 1 ? '' : 's'}`, 'success');
   } catch (e) {
