@@ -367,11 +367,18 @@ function handleClick(e) {
       break;
     }
     case 'reset-section-layout': {
-      if (!confirm('Clear your section template? New newsletters will fall back to the standard layout.')) break;
-      if (state.defaultPrompts) { delete state.defaultPrompts._layout; delete state.defaultPrompts._sections; }
-      scheduleSettingsSave();
-      render();
-      toast('Template reset to standard', 'success');
+      showConfirm({
+        title: 'Reset section template?',
+        message: 'New newsletters will fall back to the standard layout. Your existing newsletters are unaffected.',
+        confirmText: 'Reset template',
+        danger: true,
+      }).then(ok => {
+        if (!ok) return;
+        if (state.defaultPrompts) { delete state.defaultPrompts._layout; delete state.defaultPrompts._sections; }
+        scheduleSettingsSave();
+        render();
+        toast('Template reset to standard', 'success');
+      });
       break;
     }
     case 'toggle-feed':     toggleFeed(d.feedId); break;
@@ -977,6 +984,66 @@ function showAuthModal(tab = 'signup') {
 function closeModal() {
   const m = document.getElementById('modal-root');
   if (m) m.innerHTML = '';
+}
+
+// Styled confirm dialog. Returns Promise<boolean>. Drop-in replacement for
+// window.confirm() that fits the app's look (dark/light themes, focus trap,
+// Esc to cancel, Enter to confirm).
+function showConfirm(opts = {}) {
+  const {
+    title = 'Are you sure?',
+    message = '',
+    confirmText,
+    cancelText = 'Cancel',
+    danger = false,
+  } = opts;
+  const confirmLabel = confirmText || (danger ? 'Delete' : 'Confirm');
+
+  return new Promise(resolve => {
+    const modal = document.getElementById('modal-root');
+    if (!modal) { resolve(window.confirm(message || title)); return; } // safety fallback
+
+    // Format the message: keep paragraphs, escape HTML
+    const body = escHtml(message)
+      .split('\n\n').filter(Boolean)
+      .map(p => `<p style="margin:0 0 10px;line-height:1.55;color:var(--text-2);font-size:13.5px">${p.replace(/\n/g, '<br>')}</p>`)
+      .join('');
+
+    modal.innerHTML = `
+      <div class="modal-overlay" id="confirm-overlay">
+        <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"
+          style="max-width:440px;padding:24px 26px">
+          <div id="confirm-title" style="font-size:16px;font-weight:700;letter-spacing:-0.01em;color:var(--text-1);margin-bottom:${body ? '10px' : '18px'}">
+            ${escHtml(title)}
+          </div>
+          ${body}
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+            <button class="btn btn-outline" id="confirm-cancel">${escHtml(cancelText)}</button>
+            <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="confirm-ok" style="${danger ? 'background:var(--red);border-color:var(--red);color:#fff' : ''}">${escHtml(confirmLabel)}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    const overlay = modal.querySelector('#confirm-overlay');
+    const okBtn = modal.querySelector('#confirm-ok');
+    const cancelBtn = modal.querySelector('#confirm-cancel');
+    let done = false;
+    const finish = (value) => {
+      if (done) return; done = true;
+      document.removeEventListener('keydown', onKey, true);
+      closeModal();
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    };
+    overlay.addEventListener('click', e => { if (e.target === overlay) finish(false); });
+    cancelBtn.addEventListener('click', () => finish(false));
+    okBtn.addEventListener('click', () => finish(true));
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => okBtn.focus(), 30);
+  });
 }
 
 function switchAuthTab(tab) {
@@ -2926,7 +2993,7 @@ function sectionTypePickerHtml(sectionId, currentType) {
 // store content in different shapes (briefing → topStoriesContent string; synth
 // types → a single _lead entry with _sources; everything else → per-article
 // entries) so changing means clearing whatever doesn't transfer.
-function changeSectionType(sectionId, newType) {
+async function changeSectionType(sectionId, newType) {
   const meta = state.newsletter.sectionMeta[sectionId];
   if (!meta || meta.type === newType) return;
 
@@ -2936,11 +3003,18 @@ function changeSectionType(sectionId, newType) {
   if (oldType === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
   if (isSynthType(oldType)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
 
-  if (hasContent && !confirm(`Change "${meta.name}" to a different style?\n\nThis section's current content doesn't transfer between styles and will be cleared. Your sources and brand voice are unaffected.`)) {
-    // Revert the dropdown to the old value
-    const sel = document.querySelector(`#section-${sectionId} .section-type-picker`);
-    if (sel) sel.value = oldType;
-    return;
+  if (hasContent) {
+    const ok = await showConfirm({
+      title: `Change "${meta.name}" to a different style?`,
+      message: 'This section\'s current content doesn\'t transfer between styles and will be cleared.\n\nYour sources and brand voice are unaffected.',
+      confirmText: 'Change style',
+      danger: true,
+    });
+    if (!ok) {
+      const sel = document.querySelector(`#section-${sectionId} .section-type-picker`);
+      if (sel) sel.value = oldType;
+      return;
+    }
   }
 
   state.newsletter.sectionMeta[sectionId].type = newType;
@@ -3637,7 +3711,13 @@ window.moveNewsletterToPublication = moveNewsletterToPublication;
 async function deleteNewsletter(id) {
   const nl = state.dbNewsletters.find(n => n.id === id);
   const name = nl?.title || 'this newsletter';
-  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  const ok = await showConfirm({
+    title: `Delete "${name}"?`,
+    message: 'This newsletter will be permanently removed. This cannot be undone.',
+    confirmText: 'Delete newsletter',
+    danger: true,
+  });
+  if (!ok) return;
   if (!sb || !state.user) {
     // No Supabase — remove from local list only
     state.dbNewsletters = state.dbNewsletters.filter(n => n.id !== id);
@@ -4833,7 +4913,7 @@ function confirmAddSection() {
   scheduleSave();
 }
 
-function removeSection(sectionId) {
+async function removeSection(sectionId) {
   if (state.newsletter.sectionOrder.length <= 1) { toast('A newsletter needs at least one section', 'warn'); return; }
   const meta = state.newsletter.sectionMeta[sectionId] || {};
   const name = meta.name || 'this section';
@@ -4844,10 +4924,15 @@ function removeSection(sectionId) {
   if (meta.type === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
   if (isSynthType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
 
-  const msg = hasContent
-    ? `Delete the "${name}" section? Its content in this issue will be removed (this won't affect your saved default layout unless you re-save it).`
-    : `Delete the "${name}" section?`;
-  if (!confirm(msg)) return;
+  const ok = await showConfirm({
+    title: `Delete the "${name}" section?`,
+    message: hasContent
+      ? 'Its content in this issue will be removed.\n\nThis won\'t affect your saved default layout unless you re-save it.'
+      : '',
+    confirmText: 'Delete section',
+    danger: true,
+  });
+  if (!ok) return;
 
   state.newsletter.sectionOrder = state.newsletter.sectionOrder.filter(id => id !== sectionId);
   delete state.newsletter.sections[sectionId];
@@ -5224,7 +5309,13 @@ async function switchPublication(id) {
 async function deletePublication(id) {
   const pub = state.publications.find(p => p.id === id);
   if (!pub) return;
-  if (!confirm(`Delete "${pub.name}"? This cannot be undone.`)) return;
+  const ok = await showConfirm({
+    title: `Delete the "${pub.name}" publication?`,
+    message: 'Its sources will be removed.\n\nNewsletters belonging to this publication will be moved to your Default publication, not deleted.',
+    confirmText: 'Delete publication',
+    danger: true,
+  });
+  if (!ok) return;
   const { error } = await sb.from('publications').delete().eq('id', id).eq('user_id', state.user.id);
   if (error) { toast('Delete failed', 'error'); return; }
   state.publications = state.publications.filter(p => p.id !== id);
