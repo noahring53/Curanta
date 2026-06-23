@@ -2906,17 +2906,18 @@ function refreshTopStoriesSection() {
 
 // Renders the inline dropdown that lets you change a section's content style.
 function sectionTypePickerHtml(sectionId, currentType) {
+  // Short labels so the dropdown stays compact in narrow editor columns.
   const opts = [
-    ['briefing', "Today's Briefing"],
-    ['lead',     'Lead Story'],
+    ['briefing', 'Briefing'],
+    ['lead',     'Lead'],
     ['hits',     'Quick Hits'],
-    ['cta',      'CTA / Sponsor'],
+    ['cta',      'CTA'],
     ['generic',  'Generic'],
   ];
   return `<select class="input input-sm section-type-picker"
     title="Change this section's content style"
     onchange="changeSectionType('${sectionId}', this.value)"
-    style="font-size:11px;padding:3px 6px;cursor:pointer;max-width:140px">
+    style="font-size:11px;padding:3px 6px;cursor:pointer;max-width:110px">
     ${opts.map(([v, lbl]) => `<option value="${v}" ${currentType === v ? 'selected' : ''}>${lbl}</option>`).join('')}
   </select>`;
 }

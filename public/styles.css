@@ -45,8 +45,8 @@ ul, ol { list-style: none; }
   --shadow-xl: 0 24px 80px rgba(0,0,0,0.85);
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-  --sidebar-w: 260px;
-  --right-panel-w: 320px;
+  --sidebar-w: 240px;
+  --right-panel-w: 300px;
   --header-h: 54px;
   --nav-accent: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
   --nav-bg: linear-gradient(180deg, #111628 0%, #0d1020 100%);
@@ -1040,7 +1040,10 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
   border: 1.5px dashed var(--border-strong); border-radius: var(--r-md);
   padding: 28px 20px; text-align: center; color: var(--text-3);
   transition: border-color 0.15s, color 0.15s, background 0.15s;
+  /* Prevent words from wrapping into a vertical strip in narrow editor columns */
+  min-width: 0; word-break: keep-all; overflow-wrap: normal;
 }
+.drop-placeholder p, .drop-placeholder small { white-space: normal; }
 .section-drop-zone.drag-over .drop-placeholder {
   border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
 }
@@ -1137,9 +1140,10 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 .tone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .tone-chip {
-  padding: 7px 10px; border-radius: var(--r-sm); font-size: 11.5px; font-weight: 600;
+  padding: 7px 8px; border-radius: var(--r-sm); font-size: 11px; font-weight: 600;
   border: 1px solid var(--border); color: var(--text-2); text-align: center; cursor: pointer;
   transition: all 0.15s; line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tone-chip:hover { border-color: var(--border-strong); color: var(--text-1); background: var(--bg-3); }
 .tone-chip.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(99,102,241,0.35); }
@@ -1377,4 +1381,18 @@ input[type="color"] {
 @media (max-width: 600px) {
   .features-grid { grid-template-columns: 1fr; }
   .nav-links { display: none; }
+}
+
+/* ── Builder: narrower viewports ─────────────────────────────────────────────
+   On smaller windows the three-column builder gets cramped — shrink the side
+   columns so the editor (the part that matters) always has breathing room. */
+@media (max-width: 1200px) {
+  :root { --sidebar-w: 220px; --right-panel-w: 280px; }
+  .editor-main { padding: 18px 18px; }
+}
+@media (max-width: 1000px) {
+  :root { --sidebar-w: 200px; --right-panel-w: 260px; }
+  .section-header { flex-wrap: wrap; gap: 6px !important; }
+  .section-prompt-wrap { flex-wrap: wrap; }
+  .tone-grid { grid-template-columns: 1fr; } /* stack so names don't truncate */
 }
