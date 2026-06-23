@@ -4422,6 +4422,7 @@ async function callAIStream(action, content, options = {}, onDelta) {
       if (!line.startsWith('data:')) continue;
       let data; try { data = JSON.parse(line.slice(5).trim()); } catch { continue; }
       if (data.delta) { full += data.delta; onDelta && onDelta(full); }
+      else if (data.clean) { full = data.clean; onDelta && onDelta(full); } // server-side voice-sanitized final text
       else if (data.error) { throw new Error(data.error); }
     }
   }

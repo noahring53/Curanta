@@ -774,6 +774,153 @@ WHAT TO DO INSTEAD:
 - If you have a take, state it as a claim, not as "some argue". Own it.
 - End on a specific detail, fact, or thing to watch — not on a forced kicker or pep-talk close. A flat factual close is better than a fake-profound one.`;
 
+// ── Post-process AI output to strip AI tells the prompt didn't catch ──────────
+// Prompts are not 100% reliable. The model occasionally slips. This is the
+// deterministic safety net: pure text munging, no model call. Conservative —
+// only touches high-confidence AI patterns so it never mangles real prose.
+const TELEGRAPHED_SUBHEADS = [
+  'Why it matters', 'The details', 'The angle', 'Big picture', 'The big picture',
+  'Bottom line', 'The bottom line', 'TL;DR', 'TLDR', 'Real talk', 'Worth noting',
+  'The takeaway', 'Key takeaway', 'My take', 'Hot take', 'The play',
+  'The kicker', "What's next", 'What to watch', 'The breakdown',
+  "Here's the thing", "Here's why this matters", 'In summary', 'The verdict',
+  'The reality', 'The catch', 'The context', 'The upshot', 'The bottom-line',
+];
+
+const THROAT_CLEARING_OPENERS = [
+  /^In a striking [^.]{1,50}?[,.]\s*/i,
+  /^In a stunning [^.]{1,50}?[,.]\s*/i,
+  /^In a major [^.]{1,50}?[,.]\s*/i,
+  /^In a bold [^.]{1,50}?[,.]\s*/i,
+  /^In a (?:significant|notable|dramatic|surprising|remarkable) [^.]{1,50}?[,.]\s*/i,
+  /^In a move that [^.]{1,80}?[,.]\s*/i,
+  /^In a (?:rare|unprecedented|historic) [^.]{1,50}?[,.]\s*/i,
+  /^In today's fast-paced [^.]{1,50}?[,.]\s*/i,
+  /^In an era of [^.]{1,50}?[,.]\s*/i,
+  /^Amid (?:growing|mounting|rising|escalating) [^.,]{1,50}?[,.]\s*/i,
+  /^As [^.,]{1,80}? continues to [^.,]{1,80}?[,.]\s*/i,
+];
+
+// Sentences at the END of a piece that are pure AI flourish
+const CLICHE_CLOSERS = [
+  /\s*And that changes everything[.!]?\s*$/im,
+  /\s*Make no mistake[.!]?\s*$/im,
+  /\s*(?:Only )?[Tt]ime will tell[.!]?\s*$/im,
+  /\s*Watch this space[.!]?\s*$/im,
+  /\s*The stakes (?:could not be higher|have never been higher)[.!]?\s*$/im,
+  /\s*Buckle up[.!]?\s*$/im,
+  /\s*Stay tuned[.!]?\s*$/im,
+  /\s*One thing is (?:clear|certain)[:.][^\n]*$/im,
+];
+
+// Strip these phrases wherever they appear (with smart spacing cleanup)
+const INLINE_REMOVALS = [
+  /\b(?:it'?s worth noting that|it is worth noting that)\s*/gi,
+  /\bneedless to say,?\s*/gi,
+  /\brest assured,?\s*/gi,
+  /\b(?:Notably|Importantly|Crucially|Significantly),\s*/g,
+  /\bin conclusion,\s*/gi,
+  /\bat the end of the day,\s*/gi,
+  /\ball told,\s*/gi,
+  /\bmoving forward,\s*/gi,
+  /\bthat said,\s*/gi,
+  /\bwhen all is said and done,\s*/gi,
+];
+
+// AI-vocabulary swaps to neutral journalism English
+const PHRASE_SWAPS = [
+  [/\bdelves? into\b/gi, 'examines'],
+  [/\bdelved into\b/gi, 'examined'],
+  [/\bdelving into\b/gi, 'examining'],
+  [/\bunderscores?\b/gi, 'shows'],
+  [/\bunderscored\b/gi, 'showed'],
+  [/\bhighlights? the importance of\b/gi, 'matters for'],
+  [/\bnavigat(?:e|es) the complexities of\b/gi, 'works through'],
+  [/\bnavigating the complexities of\b/gi, 'working through'],
+  [/\bnavigated the complexities of\b/gi, 'worked through'],
+  [/\bin today's fast-paced world,?\s*/gi, ''],
+  [/\bin an era of [^,.\n]{1,80},\s*/gi, ''], // delete the entire prepositional phrase
+  [/\bgame-?changers?\b/gi, 'major shift'],
+  [/\bgame-?changing\b/gi, 'significant'],
+  [/\bripple effects?\b/gi, 'consequences'],
+  [/\bwatershed moments?\b/gi, 'turning point'],
+  [/\b(?:seismic|tectonic) shifts?\b/gi, 'major changes'],
+  [/\bparadigm shifts?\b/gi, 'shift'],
+  [/\ba testament to\b/gi, 'evidence of'],
+  [/\bthe landscape of\b/gi, ''],
+  [/\bthe tapestry of\b/gi, ''],
+  [/\bthe ecosystem of\b/gi, ''],
+  [/\bleverag(?:e|es|ed|ing) (?=[a-z])/gi, 'use '], // "leverage X" → "use X"
+  [/\b(?:robust|comprehensive) (?=\w)/gi, ''], // padding adjectives
+];
+
+function sanitizeAIVoice(text) {
+  if (!text || typeof text !== 'string') return text;
+  let s = text;
+
+  // 1. Strip telegraphed subheads anywhere. Handles all three forms:
+  //    **Subhead:**   (colon INSIDE the bold — the most common AI output)
+  //    **Subhead**:   (colon outside the bold)
+  //    Subhead:       (no bold)
+  const subheadPattern = TELEGRAPHED_SUBHEADS
+    .map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  s = s.replace(
+    new RegExp(
+      `(?:^|\\n)\\s*(?:` +
+        // **Subhead[:]** or __Subhead[:]__
+        `[*_]{1,2}\\s*(?:${subheadPattern})\\s*[:：—-]?\\s*[*_]{1,2}\\s*[:：—-]?\\s*` +
+        `|` +
+        // Plain Subhead: or Subhead —
+        `(?:${subheadPattern})\\s*[:：—-]\\s*` +
+      `)`,
+      'gi',
+    ),
+    '\n\n',
+  );
+
+  // 2. Strip throat-clearing openers (paragraph beginnings)
+  s = s.replace(/(^|\n\n)([^\n]+)/g, (match, pre, line) => {
+    for (const re of THROAT_CLEARING_OPENERS) {
+      const cleaned = line.replace(re, '');
+      if (cleaned !== line && cleaned.trim().length > 10) {
+        return pre + cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+      }
+    }
+    return match;
+  });
+
+  // 3. Strip cliché closers at end of text
+  for (const re of CLICHE_CLOSERS) s = s.replace(re, '');
+
+  // 4. In-line removals (do these before phrase swaps so swaps don't recreate them)
+  for (const re of INLINE_REMOVALS) s = s.replace(re, '');
+
+  // 5. Phrase swaps
+  for (const [re, sub] of PHRASE_SWAPS) s = s.replace(re, sub);
+
+  // 6. Cleanup: multiple spaces, space-before-punctuation, excess blank lines
+  s = s.replace(/[ \t]{2,}/g, ' ');
+  s = s.replace(/\s+([.,;:!?])/g, '$1');
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  // 7. Re-capitalize sentence starts if a leading word was stripped
+  s = s.replace(/^\s*([a-z])/, (_, c) => c.toUpperCase());
+  s = s.replace(/(\n\n)\s*([a-z])/g, (_, p, c) => p + c.toUpperCase());
+  // Also capitalize after sentence-ending punctuation when an opener was stripped mid-paragraph
+  s = s.replace(/([.!?]\s+)([a-z])/g, (_, pre, c) => pre + c.toUpperCase());
+
+  return s.trim();
+}
+
+// Which actions get sanitized. Skip subject-line / preview-text / brand-voice /
+// briefing-prompt / hooks — those are short, intentional, or meta and the
+// sanitizer's rules don't apply meaningfully.
+const SANITIZE_ACTIONS = new Set([
+  'lead-story', 'quick-hit', 'quick-hits', 'top-stories',
+  'rewrite', 'summarize', 'cta',
+]);
+
 // Per-action sampling temperature. Lower = more grounded/consistent (good for
 // factual synthesis); higher = more varied (good for creative headline work).
 const TEMPERATURE = {
@@ -1188,8 +1335,20 @@ Examples:
     res.flushHeaders?.();
     try {
       const stream = anthropic.messages.stream(params);
-      stream.on('text', (delta) => { res.write(`data: ${JSON.stringify({ delta })}\n\n`); });
+      let assembled = '';
+      stream.on('text', (delta) => {
+        assembled += delta;
+        res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+      });
       await stream.finalMessage();
+      // Send a cleaned final version so the client can replace the streamed text
+      // with the sanitized one (user sees live streaming, then it polishes).
+      if (SANITIZE_ACTIONS.has(action)) {
+        const cleaned = sanitizeAIVoice(assembled);
+        if (cleaned !== assembled) {
+          res.write(`data: ${JSON.stringify({ clean: cleaned })}\n\n`);
+        }
+      }
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (e) {
@@ -1202,7 +1361,9 @@ Examples:
 
   try {
     const message = await anthropic.messages.create(params);
-    return res.json({ result: message.content[0].text });
+    const raw = message.content[0].text;
+    const result = SANITIZE_ACTIONS.has(action) ? sanitizeAIVoice(raw) : raw;
+    return res.json({ result });
   } catch (e) {
     console.error('Anthropic error:', e.message);
     return res.status(500).json({ error: e.message });
