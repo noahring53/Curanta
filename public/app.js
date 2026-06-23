@@ -2637,10 +2637,10 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(sectionName)}</span>
     <div class="section-prompt-wrap" style="gap:6px">
       ${promptOpen ? `
-        <input class="section-prompt" data-section="${sectionId}" value="${escHtml(state.newsletter.prompts[sectionId] || '')}" placeholder="Optional style instructions…" style="font-size:11px">
+        <input class="section-prompt" data-section="${sectionId}" value="${escHtml(state.newsletter.prompts[sectionId] || '')}" placeholder="${hasStandingPrompt(sectionId) ? 'Optional angle for this issue (added to your default)…' : 'Optional angle for this issue…'}" style="font-size:11px">
         <button class="btn btn-sm btn-ghost" data-action="briefing-prompt-from-examples" title="Paste past briefings to generate a prompt">✨</button>
       ` : ''}
-      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, 'briefing')}
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
@@ -2709,12 +2709,12 @@ function synthConfig(sectionId) {
   const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
   if (type === 'hits') {
     return { type, action: 'quick-hits', noun: 'quick hits', label: 'Quick hits',
-      promptPlaceholder: 'Style instructions for the list…',
+      promptPlaceholder: 'Angle for this issue (added to your default)…',
       sourcesLabel: 'staged — add more from the sidebar, then Generate',
       awaiting: n => `turn ${n} article${n === 1 ? '' : 's'} into a bulleted list with a sources footer` };
   }
   return { type, action: 'lead-story', noun: 'lead story', label: 'Lead story',
-    promptPlaceholder: 'Angle / instructions for this story…',
+    promptPlaceholder: 'Angle for this story (added to your default)…',
     sourcesLabel: 'on this story — add more from the sidebar, then Generate',
     awaiting: n => `synthesize ${n} report${n === 1 ? '' : 's'} into one lead story with source links` };
 }
@@ -2842,7 +2842,7 @@ function renderLeadSection(sectionId, label) {
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
     <div class="section-prompt-wrap">
       ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="${cfg.promptPlaceholder}">` : ''}
-      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, cfg.type)}
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
@@ -2946,8 +2946,8 @@ function renderSection(sectionId, label, type = 'hits') {
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
     <div class="section-prompt-wrap">
-      ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="Section prompt for this issue…">` : ''}
-      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide custom prompt' : 'Customize prompt for this issue'}">✏</button>
+      ${promptOpen ? `<input class="section-prompt" data-section="${sectionId}" value="${escHtml(prompt)}" placeholder="${hasStandingPrompt(sectionId) ? 'Optional angle for this issue (added to your default)…' : 'Optional angle for this issue…'}">` : ''}
+      <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, type)}
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
@@ -3733,15 +3733,37 @@ async function deleteNewsletter(id) {
 }
 
 function effectivePrompt(sectionId) {
-  // Per-issue prompt takes precedence; fall back to the matching section default
-  const issuePrompt = state.newsletter.prompts[sectionId] || '';
-  if (issuePrompt) return issuePrompt;
-  // Try direct section ID match first (user-defined sections)
-  if (state.defaultPrompts?.[sectionId]) return state.defaultPrompts[sectionId];
-  // Fall back to type-based key (legacy / built-in sections)
+  // Two layers, COMBINED at generation time:
+  //   - Settings template prompt (standing style guide, per publication)
+  //   - Builder per-issue prompt (the unique angle for THIS issue only)
+  const issueAngle = (state.newsletter.prompts[sectionId] || '').trim();
+  let standingStyle = '';
+  if (state.defaultPrompts?.[sectionId]) {
+    standingStyle = state.defaultPrompts[sectionId];
+  } else {
+    // Fall back to type-based default for legacy / built-in sections
+    const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
+    const typeToKey = { briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta', generic: 'generic' };
+    standingStyle = state.defaultPrompts?.[typeToKey[type] || 'generic'] || '';
+  }
+  standingStyle = (standingStyle || '').trim();
+
+  if (standingStyle && issueAngle) {
+    return `${standingStyle}\n\nFor this issue specifically: ${issueAngle}`;
+  }
+  return issueAngle || standingStyle;
+}
+// Whether a per-issue angle is set (used to show a small indicator in the builder)
+function hasIssueAngle(sectionId) {
+  return !!(state.newsletter.prompts?.[sectionId] || '').trim();
+}
+// Whether a publication default exists for this section (used for placeholder copy)
+function hasStandingPrompt(sectionId) {
+  if (!state.defaultPrompts) return false;
+  if (state.defaultPrompts[sectionId]) return true;
   const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
   const typeToKey = { briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta', generic: 'generic' };
-  return state.defaultPrompts?.[typeToKey[type] || 'generic'] || '';
+  return !!state.defaultPrompts[typeToKey[type] || 'generic'];
 }
 
 // The section-defaults "template": an ordered list of {id, name, type} plus a
@@ -5692,9 +5714,7 @@ function resetNewsletter() {
       const m = layout.meta?.[id] || { name: id, type: 'generic' };
       meta[id] = { name: m.name || id, type: m.type || 'generic' };
       sections[id] = [];
-      // Prefer the live-edited prompt (dp[id], what the Settings textarea writes),
-      // then the layout snapshot, then the type default.
-      prompts[id] = dp[id] || layout.prompts?.[id] || dp[typeDefaultKey(meta[id].type)] || '';
+      prompts[id] = ''; // Issue-angle field starts EMPTY. Settings default is combined at generation time via effectivePrompt().
     }
     state.newsletter = {
       title: 'Untitled Newsletter', subject: '', previewText: '', subjectLines: [],
@@ -5703,7 +5723,7 @@ function resetNewsletter() {
       sectionMeta: meta,
     };
   } else {
-    // Default layout — map default prompts by section type onto the built-in section IDs
+    // Default layout — issue-angle fields start empty; defaults apply via effectivePrompt
     state.newsletter = {
       title: 'Untitled Newsletter',
       subject: '',
@@ -5711,12 +5731,7 @@ function resetNewsletter() {
       subjectLines: [],
       sections: { topStories: [], leadStory: [], quickHits: [], cta: [] },
       topStoriesContent: '',
-      prompts: {
-        topStories: dp.briefing || '',
-        leadStory:  dp.lead     || '',
-        quickHits:  dp.hits     || '',
-        cta:        dp.cta      || '',
-      },
+      prompts: { topStories: '', leadStory: '', quickHits: '', cta: '' },
       sectionOrder: ['topStories', 'leadStory', 'quickHits', 'cta'],
       sectionMeta: {
         topStories: { name: "Today's Briefing", type: 'briefing' },
