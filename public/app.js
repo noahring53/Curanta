@@ -2413,7 +2413,7 @@ function renderSourceSidebar() {
 <div class="source-divider"></div>
 ${allArticles.length === 0
   ? `<div style="padding:16px;text-align:center;color:var(--text-3);font-size:12px">Fetching articles…</div>`
-  : allArticles.map(a => renderArticleCard(a, a.feedId, inSection.has(a.id))).join('')
+  : allArticles.map(a => renderArticleCard(a, a.feedId, inSection.has(a))).join('')
 }`;
 }
 
@@ -2429,7 +2429,7 @@ function renderFeedGroup(feed) {
     <button class="feed-remove-btn" data-action="remove-feed" data-feed-id="${feed.id}" title="Remove source">×</button>
   </div>
   <div class="feed-articles">
-    ${feed.articles.map(a => renderArticleCard(a, feed.id, inSection.has(a.id))).join('')}
+    ${feed.articles.map(a => renderArticleCard(a, feed.id, inSection.has(a))).join('')}
   </div>
 </div>`;
 }
@@ -3364,12 +3364,29 @@ function refreshSectionContent(sectionId) {
 }
 
 function getAllSectionArticleIds() {
+  // Returns BOTH id and url sets. URLs are stable across refreshes (each
+  // ingest fetch gives articles a new random UUID, so id-only matching breaks
+  // after a refresh — match by url too to keep the sidebar "in-section" greyed).
   const ids = new Set();
+  const urls = new Set();
+  const addIfHas = (a) => {
+    if (a?.id) ids.add(a.id);
+    if (a?.url) urls.add(a.url);
+  };
   Object.values(state.newsletter.sections).forEach(arr => arr.forEach(a => {
-    ids.add(a.id);
-    if (a._sources) a._sources.forEach(s => ids.add(s.id)); // lead-story source articles
+    addIfHas(a);
+    if (a._sources) a._sources.forEach(addIfHas); // lead-story / quick-hits sources
   }));
-  return ids;
+  return {
+    ids,
+    urls,
+    has(article) {
+      if (!article) return false;
+      if (article.id && ids.has(article.id)) return true;
+      if (article.url && urls.has(article.url)) return true;
+      return false;
+    },
+  };
 }
 
 function findArticle(articleId) {
@@ -3410,7 +3427,7 @@ async function addToSection(articleId, sectionId) {
   const article = findArticle(articleId);
   if (!article) { toast('Article not found', 'error'); return; }
   if (!state.newsletter.sections[sectionId]) state.newsletter.sections[sectionId] = [];
-  if (state.newsletter.sections[sectionId].some(a => a.id === articleId)) {
+  if (state.newsletter.sections[sectionId].some(a => a.id === articleId || (article.url && a.url === article.url))) {
     toast('Article already in this section', 'warn'); return;
   }
   const sectionType = state.newsletter.sectionMeta[sectionId]?.type || 'hits';
