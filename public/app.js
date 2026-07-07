@@ -265,12 +265,25 @@ async function navigate(view, params = {}) {
   if (view === 'builder') {
     if (params.id && params.id !== state.newsletterId) {
       await loadBuilderData(params.id);
-    } else if (!params.id) {
+    } else if (params.new) {
+      // Explicit "+ New Newsletter": start fresh from the template, auto-titled with today's date
       clearBuilderDraft('new'); // discard any stale unsaved draft so we start clean from the template
       resetNewsletter();
       cacheBuilderDraft();      // snapshot the fresh template newsletter as the 'new' draft
       if (sb && state.user) state.sources = await loadSourcesFromDB();
+    } else if (!params.id && !state.newsletterId) {
+      const draft = readBuilderDraft('new');
+      if (!draft) {
+        // Bare "Builder" nav click with nothing in progress — send them to the
+        // dashboard (the newsletter list) instead of silently creating an issue.
+        return navigate('dashboard');
+      }
+      // Resume the unsaved in-progress draft (e.g. after landing on the dashboard first)
+      resetNewsletter();
+      applyBuilderDraft(draft);
+      if (sb && state.user) state.sources = await loadSourcesFromDB();
     }
+    // Bare nav click with an issue already in progress: just resume it (no reset).
     autoFetchSources();
   }
 
@@ -331,7 +344,7 @@ function handleClick(e) {
     case 'delete-publication': deletePublication(d.id); break;
     case 'rename-publication': renamePublication(d.id); break;
     case 'rename-default-publication': renameDefaultPublication(); break;
-    case 'open-builder':    navigate('builder'); break;
+    case 'open-builder':    navigate('builder', { new: true }); break;
     case 'open-newsletter': navigate('builder', { id: d.id }); break;
     case 'show-auth':       showAuthModal(d.tab || 'login'); break;
     case 'forgot-password': showForgotPasswordForm(); break;
@@ -3032,6 +3045,7 @@ function removeTopStory(articleId) {
     state.newsletter.sections[briefingId] = state.newsletter.sections[briefingId].filter(a => a.id !== articleId);
   }
   refreshTopStoriesSection();
+  refreshSourceSidebar(); // un-grey the article in the sidebar
   scheduleSave();
 }
 
@@ -3435,6 +3449,7 @@ async function addToSection(articleId, sectionId) {
     const staged = { ...article };
     state.newsletter.sections[sectionId].push(staged);
     refreshTopStoriesSection();
+    refreshSourceSidebar(); // grey the article in the sidebar (every other path does this)
     scheduleSave();
     hydrateArticleText(staged); // background: full text ready by generate time
     return;
@@ -4202,7 +4217,7 @@ function showVoiceWizardResults(data, url) {
       </div>` : ''}
 
       <div style="display:flex;gap:10px">
-        <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="closeModal();navigate('builder')">Start writing →</button>
+        <button class="btn btn-primary" style="flex:1;justify-content:center" onclick="closeModal();navigate('builder',{new:true})">Start writing →</button>
         <button class="btn btn-outline" style="flex:1;justify-content:center" onclick="closeModal();navigate('settings')">Edit profile</button>
       </div>
       <div style="text-align:center;font-size:11px;color:var(--text-3);margin-top:12px">Everything is saved automatically. You can refine it anytime in Settings → Brand Voice.</div>
@@ -5717,6 +5732,12 @@ function getSectionLayout() {
   return null;
 }
 
+// New issues are titled with today's date, e.g. "7/7/26"
+function todayTitle() {
+  const d = new Date();
+  return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
+}
+
 function resetNewsletter() {
   const dp = state.defaultPrompts || {};
   state.newsletterId = null;
@@ -5734,7 +5755,7 @@ function resetNewsletter() {
       prompts[id] = ''; // Issue-angle field starts EMPTY. Settings default is combined at generation time via effectivePrompt().
     }
     state.newsletter = {
-      title: 'Untitled Newsletter', subject: '', previewText: '', subjectLines: [],
+      title: todayTitle(), subject: '', previewText: '', subjectLines: [],
       sections, topStoriesContent: '', prompts,
       sectionOrder: [...layout.order],
       sectionMeta: meta,
@@ -5742,7 +5763,7 @@ function resetNewsletter() {
   } else {
     // Default layout — issue-angle fields start empty; defaults apply via effectivePrompt
     state.newsletter = {
-      title: 'Untitled Newsletter',
+      title: todayTitle(),
       subject: '',
       previewText: '',
       subjectLines: [],
