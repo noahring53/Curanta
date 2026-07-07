@@ -2609,16 +2609,164 @@ function setupDropZones() {
 }
 
 function reorderStory(articleId, fromSection, toSection, insertIdx) {
+  // Cross-section moves need shape conversion (briefing/synth/regular store
+  // items differently) — route them through the universal mover.
+  if (fromSection !== toSection) { moveStoryTo(fromSection, articleId, toSection); return; }
   const fromArr = state.newsletter.sections[fromSection];
   const idx = fromArr.findIndex(a => a.id === articleId);
   if (idx === -1) return;
   const [article] = fromArr.splice(idx, 1);
-  const toArr = state.newsletter.sections[toSection];
-  toArr.splice(insertIdx, 0, article);
-  if (fromSection !== toSection) refreshSectionContent(fromSection);
+  state.newsletter.sections[toSection].splice(insertIdx, 0, article);
   refreshSectionContent(toSection);
   scheduleSave();
 }
+
+// ── Shape-aware insert + move between sections ────────────────────────────────
+// Sections store items in three shapes: briefing = plain articles, synth
+// (lead/quick-hits) = one _lead entry holding _sources, regular = per-article
+// entries with generated content. These helpers convert between them so
+// stories can move freely and URLs can be dropped into any section.
+
+function insertArticleIntoSection(article, sectionId, { generate = true } = {}) {
+  if (!article) return false;
+  if (!state.newsletter.sections[sectionId]) state.newsletter.sections[sectionId] = [];
+  const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
+
+  if (type === 'briefing') {
+    if (state.newsletter.sections[sectionId].some(a => a.id === article.id || (article.url && a.url === article.url))) {
+      toast('Already in this section', 'warn'); return false;
+    }
+    const staged = { ...article };
+    state.newsletter.sections[sectionId].push(staged);
+    refreshSection(sectionId);
+    hydrateArticleText(staged);
+    return true;
+  }
+
+  if (isSynthType(type)) {
+    const entry = getLeadEntry(sectionId, true);
+    if (entry._sources.some(s => s.id === article.id || (article.url && s.url === article.url))) {
+      toast('Already in this section', 'warn'); return false;
+    }
+    const src = toLeadSource(article);
+    entry._sources.push(src);
+    refreshSection(sectionId);
+    hydrateArticleText(src);
+    return true;
+  }
+
+  // Regular / CTA / generic: per-article entry
+  if (state.newsletter.sections[sectionId].some(a => a.id === article.id || (article.url && a.url === article.url))) {
+    toast('Already in this section', 'warn'); return false;
+  }
+  const hasContent = !!article.content;
+  const entry = { ...article, content: article.content || null, loading: !hasContent && generate };
+  state.newsletter.sections[sectionId].push(entry);
+  refreshSection(sectionId);
+  if (!hasContent && generate) {
+    const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
+    (async () => {
+      try {
+        await hydrateArticleText(entry);
+        entry.content = await callAI(typeToAction[type] || 'quick-hit', entry, { prompt: effectivePrompt(sectionId) });
+      } catch (e) {
+        entry.content = entry.summary || entry.text || '(Failed to generate — click Rewrite to retry)';
+        if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('AI generation failed: ' + e.message, 'error');
+      }
+      entry.loading = false;
+      refreshSectionContent(sectionId);
+      scheduleSave();
+    })();
+  }
+  return true;
+}
+
+function moveStoryTo(fromSectionId, articleId, toSectionId) {
+  if (!toSectionId || fromSectionId === toSectionId) return;
+  const fromType = state.newsletter.sectionMeta[fromSectionId]?.type || 'generic';
+  let article = null;
+
+  if (isSynthType(fromType)) {
+    // Item lives in the synth entry's _sources (or IS the synthesized entry — block that)
+    const entry = getLeadEntry(fromSectionId);
+    const direct = (state.newsletter.sections[fromSectionId] || []).find(a => a.id === articleId);
+    if (direct?._lead) { toast('Move the individual source articles instead of the generated story', 'warn'); return; }
+    if (entry) {
+      const i = entry._sources.findIndex(s => s.id === articleId);
+      if (i >= 0) {
+        article = entry._sources.splice(i, 1)[0];
+        if (!entry._sources.length && !entry.content) {
+          state.newsletter.sections[fromSectionId] = state.newsletter.sections[fromSectionId].filter(a => a !== entry);
+        }
+      }
+    }
+  } else {
+    const arr = state.newsletter.sections[fromSectionId] || [];
+    const i = arr.findIndex(a => a.id === articleId);
+    if (i >= 0) article = arr.splice(i, 1)[0];
+  }
+
+  if (!article) { toast('Story not found', 'error'); return; }
+
+  const ok = insertArticleIntoSection(article, toSectionId);
+  if (!ok) {
+    // Destination rejected (duplicate) — put it back where it was
+    insertArticleIntoSection(article, fromSectionId, { generate: false });
+  }
+  refreshSection(fromSectionId);
+  refreshSourceSidebar();
+  scheduleSave();
+  if (ok) toast(`Moved to "${state.newsletter.sectionMeta[toSectionId]?.name || 'section'}"`, 'success');
+}
+window.moveStoryTo = moveStoryTo;
+
+// Compact "move to section" dropdown for staged items
+function moveSelectHtml(fromSectionId, articleId) {
+  const options = state.newsletter.sectionOrder
+    .filter(id => id !== fromSectionId)
+    .map(id => `<option value="${id}">→ ${escHtml(state.newsletter.sectionMeta[id]?.name || id)}</option>`)
+    .join('');
+  if (!options) return '';
+  return `<select class="input input-sm" title="Move to another section"
+    onchange="if(this.value){moveStoryTo('${fromSectionId}','${articleId}',this.value)}"
+    style="font-size:10px;padding:2px 4px;cursor:pointer;max-width:64px;flex-shrink:0">
+    <option value="">⇄</option>${options}
+  </select>`;
+}
+
+// Paste-a-URL row shown at the bottom of every section
+function sectionUrlFormHtml(sectionId) {
+  return `<div style="display:flex;gap:6px;padding:8px 12px;border-top:1px dashed var(--border)">
+    <input id="section-url-${sectionId}" class="input input-sm" placeholder="Or paste an article URL…"
+      style="flex:1;font-size:11.5px" autocomplete="off"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();addUrlToSection('${sectionId}',this.nextElementSibling)}">
+    <button class="btn btn-sm btn-outline" onclick="addUrlToSection('${sectionId}',this)" style="flex-shrink:0">+ Add</button>
+  </div>`;
+}
+
+async function addUrlToSection(sectionId, btn) {
+  const input = document.getElementById(`section-url-${sectionId}`);
+  const url = input?.value.trim();
+  if (!url) { toast('Paste an article URL first', 'warn'); return; }
+  try { new URL(url); } catch { toast('That doesn\'t look like a valid URL', 'warn'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const res = await fetch(`/api/ingest?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+    if (!res.ok || data.error || !data.articles?.length) throw new Error(data.error || 'Could not read that URL');
+    const ok = insertArticleIntoSection(data.articles[0], sectionId);
+    if (ok) {
+      scheduleSave();
+      toast(`Added "${(data.articles[0].title || 'article').slice(0, 48)}"`, 'success');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    const btn2 = document.querySelector(`#section-url-${sectionId} + button`);
+    if (btn2) { btn2.disabled = false; btn2.textContent = '+ Add'; }
+  }
+}
+window.addUrlToSection = addUrlToSection;
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
 function renderEditorSections() {
@@ -2678,6 +2826,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
               <span style="font-size:10px;font-weight:700;color:var(--accent);white-space:nowrap;flex-shrink:0">${escHtml(a.source || 'Source')}</span>
               <span style="flex:1;min-width:0;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(a.title || '')}">${escHtml(a.title || '(untitled)')}</span>
               ${a.url ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--text-3);text-decoration:none;flex-shrink:0" title="Open original">↗</a>` : ''}
+              ${moveSelectHtml(sectionId, a.id)}
               <button style="background:none;border:none;cursor:pointer;color:var(--red);font-size:13px;padding:0 2px;line-height:1;flex-shrink:0" data-action="remove-top-story" data-article-id="${a.id}" title="Remove from briefing">×</button>
             </div>`).join('')}
           </div>
@@ -2691,6 +2840,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
         </div>` : ''}
       </div>`}
     </div>
+    ${sectionUrlFormHtml(sectionId)}
   </div>
 </div>`;
 }
@@ -2865,6 +3015,7 @@ function renderLeadSection(sectionId, label) {
     <div class="section-content" id="section-content-${sectionId}">
       ${renderLeadBody(sectionId)}
     </div>
+    ${sectionUrlFormHtml(sectionId)}
   </div>
 </div>`;
 }
@@ -2876,6 +3027,7 @@ function renderLeadSourcesBlock(sectionId, sources) {
       <span style="font-size:11px;font-weight:700;color:var(--accent);white-space:nowrap">${escHtml(s.source || 'Source')}</span>
       <span style="flex:1;min-width:0;font-size:12px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.title || '')}">${escHtml(s.title || '(untitled)')}</span>
       ${s.url ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener" style="font-size:12px;color:var(--text-3);text-decoration:none" title="Open original">↗</a>` : ''}
+      ${moveSelectHtml(sectionId, s.id)}
       <button class="btn-ghost btn-sm" style="font-size:13px;padding:0 6px;color:var(--red)" data-action="remove-lead-source" data-section="${sectionId}" data-article-id="${s.id}" title="Remove source">×</button>
     </div>`).join('');
   return `
@@ -2970,6 +3122,7 @@ function renderSection(sectionId, label, type = 'hits') {
     <div class="section-content ${isGrid && articles.length > 0 ? 'quick-hits-grid' : ''}" id="section-content-${sectionId}">
       ${articles.length === 0 ? renderDropPlaceholder(sectionId) : articles.map(a => renderStoryBlock(a, sectionId)).join('')}
     </div>
+    ${sectionUrlFormHtml(sectionId)}
   </div>
 </div>`;
 }
@@ -3330,6 +3483,7 @@ function renderStoryBlock(article, sectionId) {
       <button class="story-action-btn" data-action="shorten-story" data-article-id="${article.id}" data-section="${sectionId}">⟵ Shorten</button>
       <button class="story-action-btn" data-action="insert-image" data-article-id="${article.id}" data-section="${sectionId}">⊞ Image</button>
       <button class="story-action-btn" data-action="duplicate-story" data-article-id="${article.id}" data-section="${sectionId}">⊕ Duplicate</button>
+      ${moveSelectHtml(sectionId, article.id)}
       <button class="story-action-btn danger" data-action="remove-from-section" data-article-id="${article.id}" data-section="${sectionId}">× Remove</button>
     </div>
   </div>`;
