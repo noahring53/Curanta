@@ -406,6 +406,7 @@ function handleClick(e) {
     case 'briefing-prompt-from-examples': showBriefingPromptModal(); break;
     case 'generate-briefing-prompt': generateBriefingPrompt(); break;
     case 'remove-top-story':  removeTopStory(d.articleId); break;
+    case 'reset-section-content': resetSectionContent(d.sectionId); break;
     case 'clear-top-stories': state.newsletter.topStoriesContent = ''; refreshTopStoriesSection(); scheduleSave(); break;
     case 'edit-top-stories':  editTopStories(); break;
     case 'rewrite-story':   rewriteStory(d.articleId, d.section); break;
@@ -2804,6 +2805,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, 'briefing')}
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
+      <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
   </div>
@@ -3008,6 +3010,7 @@ function renderLeadSection(sectionId, label) {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, cfg.type)}
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
+      <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
   </div>
@@ -3115,6 +3118,7 @@ function renderSection(sectionId, label, type = 'hits') {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, type)}
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
+      <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
   </div>
@@ -5119,6 +5123,35 @@ function confirmAddSection() {
   closeModal();
   render();
   scheduleSave();
+}
+
+// Reset a section back to a blank slate: clears staged articles + generated
+// content so the user can take the section in a different direction. Keeps the
+// section itself, its type, and its prompts (issue angle + defaults).
+async function resetSectionContent(sectionId) {
+  const meta = state.newsletter.sectionMeta[sectionId] || {};
+  const name = meta.name || 'this section';
+  const arr = state.newsletter.sections[sectionId] || [];
+
+  let hasContent = arr.length > 0;
+  if (meta.type === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
+  if (isSynthType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
+  if (!hasContent) { toast('Section is already empty', 'info'); return; }
+
+  const ok = await showConfirm({
+    title: `Reset "${name}"?`,
+    message: 'All staged articles and generated content in this section will be cleared so you can start fresh.\n\nThe section itself, its style, and your prompts are kept.',
+    confirmText: 'Reset section',
+    danger: true,
+  });
+  if (!ok) return;
+
+  state.newsletter.sections[sectionId] = [];
+  if (meta.type === 'briefing') state.newsletter.topStoriesContent = '';
+  refreshSection(sectionId);
+  refreshSourceSidebar(); // un-grey the articles that were staged here
+  scheduleSave();
+  toast(`"${name}" reset — blank slate`, 'success');
 }
 
 async function removeSection(sectionId) {
