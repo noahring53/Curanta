@@ -2889,7 +2889,7 @@ function toLeadSource(a) {
     source: a.source || hostnameOf(a.url) || '',
     url: a.url || '',
     summary: a.summary || '',
-    text: a.text ? a.text.slice(0, 6000) : '',
+    text: a.text ? a.text.slice(0, 6500) : '',
   };
 }
 

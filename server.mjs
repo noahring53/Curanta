@@ -105,8 +105,27 @@ const anthropic = process.env.ANTHROPIC_API_KEY
 
 // Default model for most actions; optionally use a stronger model for the
 // flagship long-form lead story. Both overridable via env for easy upgrades.
-const MODEL       = process.env.ANTHROPIC_MODEL       || 'claude-sonnet-4-6';
+// Defaults to the newest Sonnet; FALLBACK_MODEL is used automatically if the
+// account doesn't have access to it yet (see createWithFallback).
+const MODEL       = process.env.ANTHROPIC_MODEL       || 'claude-sonnet-5';
 const MODEL_LEAD  = process.env.ANTHROPIC_MODEL_LEAD  || MODEL;
+const FALLBACK_MODEL = 'claude-sonnet-4-6';
+
+// Wraps anthropic.messages.create with an automatic model fallback: if the
+// requested model isn't available on this API key, retry once on the proven
+// fallback instead of failing the user's generation.
+async function createWithFallback(params) {
+  try {
+    return await anthropic.messages.create(params);
+  } catch (e) {
+    const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
+    if (notFound && params.model !== FALLBACK_MODEL) {
+      console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
+      return anthropic.messages.create({ ...params, model: FALLBACK_MODEL });
+    }
+    throw e;
+  }
+}
 
 const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
@@ -378,13 +397,13 @@ async function fetchArticle(url) {
     const el = $(sel).first();
     const candidate = el.text().replace(/\s+/g, ' ').trim();
     if (candidate.length > 300) {
-      text = candidate.slice(0, 5000);
+      text = candidate.slice(0, 6500);
       break;
     }
   }
 
   if (!text) {
-    text = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 5000);
+    text = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 6500);
   }
 
   const title =
@@ -673,8 +692,8 @@ app.get('/api/discover-voice', voiceLimiter, async (req, res) => {
 
   // Run deep AI analysis — generates voice profile, audience avatar, and section defaults
   try {
-    const aiRes = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+    const aiRes = await createWithFallback({
+      model: MODEL,
       max_tokens: 4000,
       system: `You are an expert writing analyst and brand strategist. You will analyze newsletter issues and produce a comprehensive AI writer profile. Your output must be valid JSON — no markdown, no commentary, just the JSON object.`,
       messages: [{
@@ -852,6 +871,15 @@ const PHRASE_SWAPS = [
   [/\bthe ecosystem of\b/gi, ''],
   [/\bleverag(?:e|es|ed|ing) (?=[a-z])/gi, 'use '], // "leverage X" → "use X"
   [/\b(?:robust|comprehensive) (?=\w)/gi, ''], // padding adjectives
+  [/\bserves? as an?\b/gi, 'is a'],
+  [/\bplays? a (?:crucial|pivotal|key|vital|critical) role in\b/gi, 'shapes'],
+  [/\bin the realm of\b/gi, 'in'],
+  [/\bit goes without saying that\s*/gi, ''],
+  [/\bat its core,\s*/gi, ''],
+  [/\bcould potentially\b/gi, 'could'],
+  [/\bmay possibly\b/gi, 'may'],
+  [/\bcompletely eliminate\b/gi, 'eliminate'],
+  [/\babsolutely essential\b/gi, 'essential'],
 ];
 
 function sanitizeAIVoice(text) {
@@ -920,6 +948,58 @@ const SANITIZE_ACTIONS = new Set([
   'lead-story', 'quick-hit', 'quick-hits', 'top-stories',
   'rewrite', 'summarize', 'cta',
 ]);
+
+// ── Editor pass ───────────────────────────────────────────────────────────────
+// A second, internal model call that tightens the flagship lead story the way
+// a veteran copy editor would — sharper lede, padding cut, rhythm varied — while
+// preserving every fact, number, quote, attribution, and markdown link exactly.
+// This is purely additive backend polish: the user's prompts (brand voice,
+// section prompts, custom instructions) are untouched and flow through the
+// FIRST call exactly as before.
+const EDITOR_ACTIONS = new Set(['lead-story']);
+
+const EDITOR_SYSTEM = `You are a veteran newsletter copy editor. You receive a finished draft and return a tightened version of the SAME piece. You are not a writer — you are an editor. You do not add information.
+
+HARD RULES (breaking any of these is a failure):
+- Preserve every fact, number, statistic, name, date, quote, and attribution exactly. Do not add, remove, or alter any of them.
+- Preserve every markdown link exactly as written — same anchor text, same URL, same position relative to its sentence. Never drop the "Sources:" line if present.
+- Do not add new claims, context, or color that isn't in the draft.
+- Keep the same paragraph count within one, and total length between 80% and 100% of the draft.
+- Return ONLY the edited text. No preamble, no notes, no explanation of your edits.
+
+WHAT TO IMPROVE:
+- Cut padding: any sentence or clause that doesn't carry a specific fact, attribution, or necessary connective goes.
+- Sharpen the lede: the first sentence should carry the hardest specific fact. If the draft buries it, move it up.
+- Vary rhythm: break up runs of same-length sentences. Mix short declaratives with longer builds.
+- Replace limp verbs (is expected to, serves as, plays a role in) with direct ones.
+- Kill any remaining AI tells: telegraphed subheads, stakes inflation ("reshape", "watershed"), hedge-and-puff ("could potentially"), throat-clearing ("Notably,"), fake-candid ("Make no mistake").
+- Tighten transitions so the piece reads as one continuous report, not assembled blocks.`;
+
+async function editorPass(draft, { brandVoice = '' } = {}) {
+  if (!anthropic || !draft || draft.length < 400) return draft; // too short to benefit
+  try {
+    const system = brandVoice
+      ? `${EDITOR_SYSTEM}\n\nThe writer's voice profile (preserve it — edit within this voice, don't flatten it):\n${brandVoice}`
+      : EDITOR_SYSTEM;
+    const res = await createWithFallback({
+      model: MODEL,
+      max_tokens: 2000,
+      temperature: 0.3,
+      system,
+      messages: [{ role: 'user', content: `Edit this draft:\n\n${draft}` }],
+    });
+    const edited = res.content[0].text.trim();
+    // Sanity guards: reject edits that lost too much or dropped the links
+    if (edited.length < draft.length * 0.55) return draft;
+    const draftLinks = (draft.match(/\]\(https?:\/\//g) || []).length;
+    const editedLinks = (edited.match(/\]\(https?:\/\//g) || []).length;
+    if (editedLinks < draftLinks) return draft;
+    return edited;
+  } catch (e) {
+    console.warn('Editor pass skipped:', e.message);
+    return draft; // never let polish break generation
+  }
+}
 
 // Per-action sampling temperature. Lower = more grounded/consistent (good for
 // factual synthesis); higher = more varied (good for creative headline work).
@@ -1107,7 +1187,7 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
       const items = contents.length ? contents : [content];
       const multi = items.length > 1;
       const sourceList = items.map((a, i) =>
-        `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 4000)}`
+        `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 5000)}`
       ).join('\n\n---\n\n');
 
       const hyperlinkRules = `
@@ -1185,7 +1265,7 @@ FORMAT:
     'quick-hits': (() => {
       const items = contents.length ? contents : [content];
       const articleList = items.map((a, i) =>
-        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 1500)}`
+        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 2000)}`
       ).join('\n\n');
       return {
         system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
@@ -1285,7 +1365,7 @@ Quote actual short phrases or patterns from the samples to make the profile conc
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
       const articleList = items.map((a, i) =>
-        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 1500)}`
+        `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 2000)}`
       ).join('\n\n');
       return {
         system: `${GROUNDING}
@@ -1341,13 +1421,14 @@ Examples:
         res.write(`data: ${JSON.stringify({ delta })}\n\n`);
       });
       await stream.finalMessage();
-      // Send a cleaned final version so the client can replace the streamed text
-      // with the sanitized one (user sees live streaming, then it polishes).
-      if (SANITIZE_ACTIONS.has(action)) {
-        const cleaned = sanitizeAIVoice(assembled);
-        if (cleaned !== assembled) {
-          res.write(`data: ${JSON.stringify({ clean: cleaned })}\n\n`);
-        }
+      // Polish the final version and send it so the client replaces the
+      // streamed draft: editor pass (lead story only) then the sanitizer.
+      // User sees live streaming, then it tightens at the end.
+      let finalText = assembled;
+      if (EDITOR_ACTIONS.has(action)) finalText = await editorPass(finalText, { brandVoice });
+      if (SANITIZE_ACTIONS.has(action)) finalText = sanitizeAIVoice(finalText);
+      if (finalText !== assembled) {
+        res.write(`data: ${JSON.stringify({ clean: finalText })}\n\n`);
       }
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
@@ -1360,9 +1441,10 @@ Examples:
   }
 
   try {
-    const message = await anthropic.messages.create(params);
-    const raw = message.content[0].text;
-    const result = SANITIZE_ACTIONS.has(action) ? sanitizeAIVoice(raw) : raw;
+    const message = await createWithFallback(params);
+    let result = message.content[0].text;
+    if (EDITOR_ACTIONS.has(action)) result = await editorPass(result, { brandVoice });
+    if (SANITIZE_ACTIONS.has(action)) result = sanitizeAIVoice(result);
     return res.json({ result });
   } catch (e) {
     console.error('Anthropic error:', e.message);
