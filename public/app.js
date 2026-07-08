@@ -3943,10 +3943,6 @@ function effectivePrompt(sectionId) {
   }
   return issueAngle || standingStyle;
 }
-// Whether a per-issue angle is set (used to show a small indicator in the builder)
-function hasIssueAngle(sectionId) {
-  return !!(state.newsletter.prompts?.[sectionId] || '').trim();
-}
 // Whether a publication default exists for this section (used for placeholder copy)
 function hasStandingPrompt(sectionId) {
   if (!state.defaultPrompts) return false;
@@ -5433,23 +5429,6 @@ function canUsePubs() {
   return state.grandfathered || (state.subscriptionPlan === 'multi' && isSubscribed());
 }
 
-async function _legacySubscribeMultiUnused() {
-  // replaced by startCheckout('multi') — kept to avoid accidental deletion of closing braces
-  if (!state.user) { toast('Sign in first', 'warn'); return; }
-  toast('Opening checkout…', 'info');
-  try {
-    const authToken = await getAuthToken();
-    const res = await fetch('/api/stripe/checkout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: state.user.id, authToken, email: state.user.email, plan: 'multi' }),
-    });
-    const data = await res.json();
-    if (data.url) window.location.href = data.url;
-    else throw new Error(data.error || 'Checkout failed');
-  } catch (e) { toast('Checkout error: ' + e.message, 'error'); }
-}
-
 // ── Publication management ────────────────────────────────────────────────────
 function showNewPublicationModal() {
   const modal = document.getElementById('modal-root');
@@ -5872,11 +5851,6 @@ async function loadBuilderData(newsletterId) {
   if (draft && draft.ts > Date.parse(nl.updated_at || 0)) applyBuilderDraft(draft);
   state.sources = await loadSourcesFromDB();
   return true;
-}
-
-// Maps a section type to its default-prompt key in state.defaultPrompts.
-function typeDefaultKey(type) {
-  return ({ briefing: 'briefing', lead: 'lead', hits: 'hits', cta: 'cta' })[type] || 'generic';
 }
 
 // The active publication's saved section template. Looks in three places, in order:
