@@ -341,17 +341,48 @@ function timeAgo(dateStr) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+// Full browser-like headers. Many news sites (Politico, Reuters, wire services)
+// run WAFs that 403 anything announcing itself as a bot — the old
+// "Mozilla/5.0 (compatible; Curanta/1.0)" UA tripped exactly that.
+const BROWSER_HEADERS = {
+  'User-Agent': BROWSER_UA,
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+  'Cache-Control': 'max-age=0',
+};
+
 async function fetchArticle(url) {
   await assertSafeUrl(url);
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; Curanta/1.0)',
-      Accept: 'text/html,application/xhtml+xml',
-    },
+  let res = await fetch(url, {
+    headers: BROWSER_HEADERS,
     redirect: 'follow',
     signal: AbortSignal.timeout(10000),
   });
 
+  // Blocked? One retry with a Google referer — passes a surprising number of
+  // WAF rules that allow search-engine-referred traffic.
+  if (res.status === 403 || res.status === 401 || res.status === 429) {
+    res = await fetch(url, {
+      headers: { ...BROWSER_HEADERS, Referer: 'https://www.google.com/', 'Sec-Fetch-Site': 'cross-site' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(10000),
+    });
+  }
+
+  if (res.status === 403 || res.status === 401) {
+    throw new Error('This site blocks automated readers. Try the same story from another outlet, or add it via the site\'s RSS feed.');
+  }
+  if (res.status === 429) {
+    throw new Error('This site is rate-limiting us — wait a minute and try again.');
+  }
+  if (res.status === 404) {
+    throw new Error('Page not found (404) — check the link.');
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const html = await res.text();
   const $ = load(html);
@@ -536,7 +567,9 @@ app.get('/api/ingest', ingestLimiter, async (req, res) => {
       articles: [article],
     });
   } catch (e) {
-    return res.status(500).json({ error: `Could not parse URL: ${e.message}` });
+    // Friendly, actionable messages pass through as-is; raw ones get a prefix
+    const friendly = /blocks automated|rate-limiting|not found \(404\)|check the link/i.test(e.message);
+    return res.status(500).json({ error: friendly ? e.message : `Could not read that URL (${e.message})` });
   }
 });
 
