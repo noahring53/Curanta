@@ -852,6 +852,143 @@ const TONES = {
   'sharp-political': 'You write like Punchbowl, NOTUS, or a senior Politico Playbook contributor: insider context, named sources, specific procedural detail. Urgency comes from substance, not adjectives. No hot-takes — the reader is already informed.',
 };
 
+// ── Shared format-rule blocks ────────────────────────────────────────────────
+// Used by both the legacy hard-coded actions and the config-driven 'section'
+// action, so a migrated section produces the same output it always did.
+function LEAD_HYPERLINK_RULES(multi) {
+  return `
+HYPERLINKS — required, this is important:
+- Attribute specific facts inline using markdown links to the outlet that reported them, e.g. "...the deal closed at $2.4B [per Bloomberg](URL)...". Use the REAL URLs given above — never invent or use "#".
+- Use ${multi ? '2–4' : '1–2'} inline hyperlinks woven naturally into the prose. Anchor text should be the outlet name or a short natural phrase, never a bare URL.${multi ? '\n- Spread the inline links across DIFFERENT sources where the facts come from.' : ''}
+- End with a separate final line: "Sources: " followed by every outlet as markdown links separated by " · ", e.g. Sources: [Reuters](URL) · [Bloomberg](URL).`;
+}
+
+function LEAD_FORMAT_RULES(multi, lengthSpec = '320–420 words, 4–6 paragraphs') {
+  return `
+
+FORMAT:
+- ${lengthSpec}. Continuous prose. NO bold subheads, NO labelled sections, NO bullet points inside the story. The structure flows through the writing.
+- Open with the news lede: a single sentence or two carrying the sharpest specific fact, number, or angle. Not a headline restatement, not throat-clearing, not a scene-set.
+- Build the news. Who, what, when, with attribution to the outlets that reported it. The body should read like a wire-service report, not a slide deck.
+- Place it in context. What's actually different about this moment versus before, supported by a specific detail or comparison.
+- If you have a take, make it. Own it as a claim. Don't lean on "some say" or "experts believe".
+- End with a specific forward-looking detail or the thing to watch — a date, a number, a named decision pending. NEVER end with a question, a pep-talk close, or a "this changes everything" flourish.
+- No exclamation marks. None. Ever.
+
+FORBIDDEN OPENINGS (these mark prose as AI on sight):
+- "In a [adjective] move/decision/development..."
+- "In a striking..." / "In a stunning..." / "In a major shift..."
+- "Amid [growing/mounting/rising]..."
+- "As [topic] continues to..."
+- "[Company] is making waves with..."
+- Any sentence that starts with a participle phrase setting the scene before the verb.
+
+VOICE EXAMPLE (don't copy the topic — match the cadence, attribution, and absence of flourish):
+
+  Anthropic raised $3.5 billion at a $61.5 billion valuation Monday, four people familiar with the round told The Information. Lightspeed led the round, which triples the company's price from a year ago and widens its lead over every other OpenAI competitor still raising at a fraction of that pace.
+  The deal closed two weeks after Anthropic shipped Claude 3.7, and roughly a week after Amazon committed an additional $4 billion outside the equity round. The two events are connected. Investors who saw the model's coding benchmarks moved from a $40 billion target to $61.5 billion in under a month, according to two people who saw the pitch.
+  That puts Anthropic at the same valuation OpenAI commanded eight months ago — except OpenAI has since raised at $157 billion. The gap between the two leaders is now bigger than the entire valuation of every other foundation-model startup combined.
+
+Notice what's NOT there: no subheads, no "Why it matters," no "Big picture," no "And here's the kicker," no rhetorical questions, no emotional adjectives. Just facts with attribution, a specific comparison, and an end that lands on a concrete number rather than a tidy moral.
+
+DELETE PASS (mandatory before finalizing):
+Re-read your draft. For every sentence, ask: does this carry a specific fact, number, attribution, named insight, or concrete comparison? If not, cut it. Long isn't bad; padding is. Three tight paragraphs beat six padded ones.
+${LEAD_HYPERLINK_RULES(multi)}`;
+}
+
+function BULLET_LIST_RULES(lengthSpec = 'under ~16 words') {
+  return `
+Format for EACH line:
+- Begin with "• " then a single relevant emoji, then the item.
+- ONE sentence only. Lead with the hardest number, stat, dollar figure, or sharpest specific fact. No second sentence.
+- No bold titles. No inline links. Keep each line tight — ${lengthSpec}.
+- Pick an emoji that fits the topic (🚀💰📈📉🏛️⚖️🛡️🗳️🤖🏥🔬🌍📅💣📺🏆🏠).
+
+After all the bullet lines, add ONE final line that begins exactly with "Sources: " and lists every article's outlet as a markdown link, in the same order, separated by ", ". Use the REAL URL for each. Use a SHORT outlet name as the anchor text (e.g. CNBC, Reuters, History, RCP) — derive it from the source name or domain.
+
+Output ONLY the bullet lines followed by the single Sources line — no intro, no header, no commentary.`;
+}
+
+function DIGEST_RULES(lengthSpec = 'under 120 characters before the URL') {
+  return `
+Format: one line per article, no bullet points.
+
+Each line: [emoji] [stat or sharpest fact] [brief context] [source URL]
+
+Rules:
+- Pick one relevant emoji based on topic (📉📈🔴🤖💼🏥🔬🎭🏆🏠📅🌱🌍⚖️📺💰🗳️🏛️)
+- Lead with the single hardest number, percentage, or dollar figure from the article. If no number exists, use the sharpest specific fact.
+- Keep the whole line ${lengthSpec}
+- End each line with the article's source URL as plain text (not markdown)
+- No intro, no explanation, no Sources line — just the lines`;
+}
+
+function PER_ARTICLE_RULES(lengthSpec = '70–100 words') {
+  return `
+FORMAT:
+- ${lengthSpec} for this item, written from the single article given.
+- Two or three sentences max unless the section brief says otherwise. Lead with the hardest number or most concrete fact — never the general topic.
+- Never open with "In a sign of...", "According to...", "As [name]...", "Amid...".
+- Unless the section brief says otherwise: open with a short bolded lede phrase (2–5 words, the news in a nutshell), then an em-dash or period, then the body; end with " [→ Read more](URL)" using the article's real URL.`;
+}
+
+// ── Config-driven section prompt ─────────────────────────────────────────────
+// Sections are defined in the app's Settings as {name, mode, format, length,
+// instructions}. The prompt is composed here at runtime from that config —
+// adding a new section requires no server changes. The editor-written
+// `instructions` is the substance layer and outranks the generic shape rules.
+const SECTION_LENGTH_SPECS = {
+  digest:    { short: 'under 120 characters before the URL', medium: 'under 160 characters before the URL', long: 'up to two sentences per line' },
+  bullets:   { short: 'under ~16 words', medium: 'under ~24 words', long: 'one to two sentences per line' },
+  prose:     { short: '150–220 words, 2–3 paragraphs', medium: '250–350 words, 3–5 paragraphs', long: '320–420 words, 4–6 paragraphs' },
+  perArticle:{ short: '40–70 words', medium: '70–100 words', long: '100–160 words' },
+};
+
+function sectionPrompt(section, items, preamble, customPrompt) {
+  const s = section || {};
+  const name = s.name || 'Section';
+  const mode = s.mode || 'perArticle';
+  const format = s.format || (mode === 'digest' ? 'bullets' : 'prose');
+  const length = s.length || 'medium';
+  const multi = items.length > 1;
+
+  let scaffold, taskLine;
+  if (mode === 'digest') {
+    scaffold = DIGEST_RULES(SECTION_LENGTH_SPECS.digest[length]);
+    taskLine = `You write the "${name}" section of a newsletter: a scannable digest with exactly ONE line per article, in the order given. Each article is a DIFFERENT story.`;
+  } else if (mode === 'synthesis' && format === 'bullets') {
+    scaffold = BULLET_LIST_RULES(SECTION_LENGTH_SPECS.bullets[length]);
+    taskLine = `You write the "${name}" section of a newsletter: a scannable bulleted list of short, punchy items. You are given several articles — each is a DIFFERENT story. Produce exactly ONE line per article, in the same order.`;
+  } else if (mode === 'synthesis') {
+    scaffold = LEAD_FORMAT_RULES(multi, SECTION_LENGTH_SPECS.prose[length]);
+    taskLine = multi
+      ? `You write the "${name}" section of a newsletter: ONE piece that SYNTHESIZES several reports about the SAME event into a single authoritative story. Merge them: corroborate facts that appear across sources, fold in unique details each outlet adds, and note where accounts meaningfully differ. Do NOT write a separate summary per outlet, and do NOT repeat the same fact twice.`
+      : `You write the "${name}" section of a newsletter: one piece written from the article below.`;
+  } else {
+    scaffold = PER_ARTICLE_RULES(SECTION_LENGTH_SPECS.perArticle[length]);
+    taskLine = `You write one item of the "${name}" newsletter section from the single article given.`;
+  }
+
+  const brief = (s.instructions || '').trim();
+  const briefBlock = brief
+    ? `\n\nSECTION BRIEF — the editor's own definition of what this section does. This defines the SUBSTANCE of what you write. Where it conflicts with the generic format guidance above, the brief wins (the grounding rules always apply):\n${brief}`
+    : '';
+
+  const sourceList = items.map((a, i) =>
+    `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, mode === 'synthesis' && format === 'prose' ? 5000 : 2000)}`
+  ).join('\n\n---\n\n');
+
+  return {
+    system: `${preamble}
+
+${taskLine}
+${scaffold}${briefBlock}
+
+The brand voice profile — if set — overrides stylistic defaults. Write as if you ARE that writer.`,
+    user: `Write the "${name}" section from ${items.length === 1 ? 'this source article' : `these ${items.length} source articles`}.${customPrompt ? `\nEditor's instructions for THIS issue specifically: ${customPrompt}` : ''}\n\n${sourceList}`,
+  };
+}
+
 // Shared grounding rules injected into every content writer. This is the single
 // biggest quality + safety lever for a news tool: it stops the model inventing
 // facts and kills the tell-tale AI clichés that make copy read as generated.
@@ -1099,7 +1236,7 @@ function sanitizeAIVoice(text) {
 // sanitizer's rules don't apply meaningfully.
 const SANITIZE_ACTIONS = new Set([
   'lead-story', 'quick-hit', 'quick-hits', 'top-stories',
-  'rewrite', 'summarize', 'cta',
+  'rewrite', 'summarize', 'cta', 'section',
 ]);
 
 // ── Editor pass ───────────────────────────────────────────────────────────────
@@ -1203,6 +1340,7 @@ const TEMPERATURE = {
   'brand-voice': 0.4,
   'briefing-prompt': 0.4,
   'score-stories': 0.2, // deterministic ranking — same feed should score the same
+  'section': 0.45,      // config-driven sections: keep the reporting voice steady
 };
 
 // Mock responses for when no API key is configured
@@ -1239,7 +1377,16 @@ function extractKeyFact(text = '') {
   return null;
 }
 
-function mockResponse(action, content, contents = []) {
+function mockResponse(action, content, contents = [], sectionCfg = null) {
+  if (action === 'section') {
+    // Route config-driven sections to the legacy mock matching their shape
+    const mode = sectionCfg?.mode || 'perArticle';
+    const format = sectionCfg?.format || 'prose';
+    const alias = mode === 'digest' ? 'top-stories'
+      : mode === 'synthesis' ? (format === 'bullets' ? 'quick-hits' : 'lead-story')
+      : 'quick-hit';
+    return mockResponse(alias, content, contents);
+  }
   if (action === 'score-stories') {
     const items = contents.length ? contents : [content];
     return JSON.stringify(items.map((a, i) => ({
@@ -1317,10 +1464,11 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     audienceAvatar = '',
     userId = '',
     authToken = '',
+    section: sectionCfg = null,
   } = req.body;
 
   if (!anthropic) {
-    return res.json({ result: mockResponse(action, content, contents), mock: true });
+    return res.json({ result: mockResponse(action, content, contents, sectionCfg), mock: true });
   }
 
   // ── Subscription + usage check ─────────────────────────────────────────────
@@ -1378,6 +1526,12 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     .join('\n');
 
   const prompts = {
+    'section': sectionPrompt(
+      sectionCfg,
+      contents.length ? contents : [content],
+      `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}`,
+      customPrompt
+    ),
     'lead-story': (() => {
       const items = contents.length ? contents : [content];
       const multi = items.length > 1;
@@ -1385,42 +1539,7 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
         `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 5000)}`
       ).join('\n\n---\n\n');
 
-      const hyperlinkRules = `
-HYPERLINKS — required, this is important:
-- Attribute specific facts inline using markdown links to the outlet that reported them, e.g. "...the deal closed at $2.4B [per Bloomberg](URL)...". Use the REAL URLs given above — never invent or use "#".
-- Use ${multi ? '2–4' : '1–2'} inline hyperlinks woven naturally into the prose. Anchor text should be the outlet name or a short natural phrase, never a bare URL.${multi ? '\n- Spread the inline links across DIFFERENT sources where the facts come from.' : ''}
-- End with a separate final line: "Sources: " followed by every outlet as markdown links separated by " · ", e.g. Sources: [Reuters](URL) · [Bloomberg](URL).`;
-
-      const leadFormatRules = `
-
-FORMAT:
-- 320–420 words, 4–6 paragraphs. Continuous prose. NO bold subheads, NO labelled sections, NO bullet points inside the story. The structure flows through the writing.
-- Open with the news lede: a single sentence or two carrying the sharpest specific fact, number, or angle. Not a headline restatement, not throat-clearing, not a scene-set.
-- Build the news. Who, what, when, with attribution to the outlets that reported it. The body should read like a wire-service report, not a slide deck.
-- Place it in context. What's actually different about this moment versus before, supported by a specific detail or comparison.
-- If you have a take, make it. Own it as a claim. Don't lean on "some say" or "experts believe".
-- End with a specific forward-looking detail or the thing to watch — a date, a number, a named decision pending. NEVER end with a question, a pep-talk close, or a "this changes everything" flourish.
-- No exclamation marks. None. Ever.
-
-FORBIDDEN OPENINGS (these mark prose as AI on sight):
-- "In a [adjective] move/decision/development..."
-- "In a striking..." / "In a stunning..." / "In a major shift..."
-- "Amid [growing/mounting/rising]..."
-- "As [topic] continues to..."
-- "[Company] is making waves with..."
-- Any sentence that starts with a participle phrase setting the scene before the verb.
-
-VOICE EXAMPLE (don't copy the topic — match the cadence, attribution, and absence of flourish):
-
-  Anthropic raised $3.5 billion at a $61.5 billion valuation Monday, four people familiar with the round told The Information. Lightspeed led the round, which triples the company's price from a year ago and widens its lead over every other OpenAI competitor still raising at a fraction of that pace.
-  The deal closed two weeks after Anthropic shipped Claude 3.7, and roughly a week after Amazon committed an additional $4 billion outside the equity round. The two events are connected. Investors who saw the model's coding benchmarks moved from a $40 billion target to $61.5 billion in under a month, according to two people who saw the pitch.
-  That puts Anthropic at the same valuation OpenAI commanded eight months ago — except OpenAI has since raised at $157 billion. The gap between the two leaders is now bigger than the entire valuation of every other foundation-model startup combined.
-
-Notice what's NOT there: no subheads, no "Why it matters," no "Big picture," no "And here's the kicker," no rhetorical questions, no emotional adjectives. Just facts with attribution, a specific comparison, and an end that lands on a concrete number rather than a tidy moral.
-
-DELETE PASS (mandatory before finalizing):
-Re-read your draft. For every sentence, ask: does this carry a specific fact, number, attribution, named insight, or concrete comparison? If not, cut it. Long isn't bad; padding is. Three tight paragraphs beat six padded ones.
-${hyperlinkRules}`;
+      const leadFormatRules = LEAD_FORMAT_RULES(multi);
 
       if (multi) {
         return {
@@ -1609,19 +1728,27 @@ Examples:
 
   const p = prompts[action] || prompts.rewrite;
 
+  // Config-driven sections take their long-form profile from their mode
+  const sectionSynthProse = action === 'section'
+    && sectionCfg?.mode === 'synthesis' && (sectionCfg.format || 'prose') === 'prose';
+
   // Allow more tokens for long-form pieces and multi-article lists
   const maxTokens = action === 'brand-voice' ? 3000
-    : ['lead-story', 'rewrite'].includes(action) ? 2000
-    : ['quick-hits', 'top-stories', 'score-stories'].includes(action) ? 1600
+    : ['lead-story', 'rewrite'].includes(action) || sectionSynthProse ? 2000
+    : ['quick-hits', 'top-stories', 'score-stories'].includes(action) || (action === 'section' && contents.length > 1) ? 1600
     : 1200;
 
   const params = {
-    model: action === 'lead-story' ? MODEL_LEAD : MODEL,
+    model: action === 'lead-story' || sectionSynthProse ? MODEL_LEAD : MODEL,
     max_tokens: maxTokens,
     temperature: TEMPERATURE[action] ?? 0.7,
     system: p.system,
     messages: [{ role: 'user', content: p.user }],
   };
+
+  // Long-form synthesized sections get the same editor pass as the lead story
+  const runEditorPass = (text) => EDITOR_ACTIONS.has(action) || sectionSynthProse
+    || (RESCUE_ACTIONS.has(action) && aiTellCount(text) >= RESCUE_THRESHOLD);
 
   // Streaming path: send text deltas via SSE as the model writes them.
   if (req.body.stream === true) {
@@ -1642,8 +1769,7 @@ Examples:
       // streamed draft: editor pass (lead story only) then the sanitizer.
       // User sees live streaming, then it tightens at the end.
       let finalText = assembled;
-      if (EDITOR_ACTIONS.has(action)
-        || (RESCUE_ACTIONS.has(action) && aiTellCount(finalText) >= RESCUE_THRESHOLD)) {
+      if (runEditorPass(finalText)) {
         finalText = await editorPass(finalText, { brandVoice });
       }
       if (SANITIZE_ACTIONS.has(action)) finalText = sanitizeAIVoice(finalText);
@@ -1663,8 +1789,7 @@ Examples:
   try {
     const message = await createWithFallback(params);
     let result = message.content[0].text;
-    if (EDITOR_ACTIONS.has(action)
-      || (RESCUE_ACTIONS.has(action) && aiTellCount(result) >= RESCUE_THRESHOLD)) {
+    if (runEditorPass(result)) {
       result = await editorPass(result, { brandVoice });
     }
     if (SANITIZE_ACTIONS.has(action)) result = sanitizeAIVoice(result);
@@ -1827,4 +1952,4 @@ app.listen(PORT, () => {
 
 // Exported for tests only (importing this module still starts the server —
 // set PORT=0 in a test to bind an ephemeral port).
-export { sanitizeAIVoice, aiTellCount };
+export { sanitizeAIVoice, aiTellCount, sectionPrompt };

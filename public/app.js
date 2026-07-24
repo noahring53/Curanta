@@ -307,6 +307,7 @@ async function navigate(view, params = {}) {
 function render() {
   const root = document.getElementById('app-root');
   if (!root) return;
+  migrateSectionConfigs(); // idempotent — fills mode/format/length/instructions on legacy metas
   if (state.view === 'landing') root.innerHTML = renderLanding();
   else if (state.view === 'dashboard') root.innerHTML = renderDashboard();
   else if (state.view === 'builder') root.innerHTML = renderBuilder();
@@ -374,6 +375,7 @@ function handleClick(e) {
     }
     case 'add-section-default': addSectionDefault(); break;
     case 'remove-section-default': removeSectionDefault(d.id); break;
+    case 'move-section-default': moveSectionDefault(d.id, parseInt(d.dir, 10)); break;
     case 'import-builder-sections': {
       const secs = state.newsletter.sectionOrder
         .map(id => ({ id, name: state.newsletter.sectionMeta[id]?.name || id, type: state.newsletter.sectionMeta[id]?.type || 'generic' }));
@@ -482,6 +484,14 @@ function handleInput(e) {
     if (!state.defaultPrompts) state.defaultPrompts = {};
     state.defaultPrompts[key] = t.value;
     scheduleSettingsSave();
+  }
+  else if (t.matches('.section-instructions-input')) {
+    const meta = state.defaultPrompts?._layout?.meta?.[t.dataset.id];
+    if (meta) { meta.instructions = t.value; scheduleSettingsSave(); }
+  }
+  else if (t.matches('.section-name-input')) {
+    const meta = state.defaultPrompts?._layout?.meta?.[t.dataset.id];
+    if (meta && t.value.trim()) { meta.name = t.value.trim(); scheduleSettingsSave(); }
   }
   else if (t.matches('.story-edit-textarea')) {
     const article = state.newsletter.sections[t.dataset.section]?.find(a => a.id === t.dataset.articleId);
@@ -2165,13 +2175,6 @@ function renderSettingsPage() {
       ${(() => {
         const userSections = getUserSections();
         const hasBuilderSections = state.newsletter.sectionOrder?.length > 0;
-        const typeOpts = [
-          ['briefing', 'Today\'s Briefing (bulleted list)'],
-          ['lead', 'Lead Story (long form)'],
-          ['hits', 'Quick Hits (emoji bullets)'],
-          ['cta', 'CTA / Sponsor'],
-          ['generic', 'Generic'],
-        ];
         return `<div class="settings-section">
         <div class="settings-section-title">Section Template${canUsePubs() ? ` <span style="font-size:11px;font-weight:600;color:var(--accent);background:var(--bg-3);padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px">📰 ${escHtml(currentPublicationName())}</span>` : ''}</div>
         <div class="settings-section-sub">These sections <strong>are</strong> your builder template — every new newsletter${canUsePubs() ? ' in <strong>' + escHtml(currentPublicationName()) + '</strong>' : ''} starts with exactly these sections, in this order, with these prompts pre-filled. Edit here and the builder follows.</div>
@@ -2201,18 +2204,35 @@ function renderSettingsPage() {
         <div style="display:flex;flex-direction:column;gap:14px">
           ${userSections.map((s, i) => `
           <div style="border:1px solid var(--border-md);border-radius:var(--r-md);padding:12px 14px">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
               <span style="font-size:11px;color:var(--text-3);width:18px">${i + 1}.</span>
-              <span style="flex:1;font-size:13px;font-weight:600">${escHtml(s.name)}</span>
-              <select class="input input-sm" onchange="setSectionDefaultType('${s.id}', this.value)" title="Content style" style="width:auto;font-size:11px;padding:3px 6px">
-                ${typeOpts.map(([v, lbl]) => `<option value="${v}" ${s.type === v ? 'selected' : ''}>${lbl}</option>`).join('')}
-              </select>
+              <input class="input section-name-input" data-id="${s.id}" value="${escHtml(s.name)}" title="Section name" style="flex:1;font-size:13px;font-weight:600;padding:4px 8px">
+              <button class="btn-icon" data-action="move-section-default" data-id="${s.id}" data-dir="-1" title="Move up" ${i === 0 ? 'disabled style="opacity:0.3"' : ''}>↑</button>
+              <button class="btn-icon" data-action="move-section-default" data-id="${s.id}" data-dir="1" title="Move down" ${i === userSections.length - 1 ? 'disabled style="opacity:0.3"' : ''}>↓</button>
               <button class="btn-icon" data-action="remove-section-default" data-id="${s.id}" title="Remove from template" style="color:var(--red);font-size:14px">🗑</button>
             </div>
-            <textarea class="input default-prompt-input" data-type="${s.id}" rows="2"
-              style="width:100%;resize:vertical;font-size:12px"
-              placeholder="Default AI instructions for this section (optional) — e.g. Lead with the hardest number, one sentence each."
-            >${escHtml(state.defaultPrompts?.[s.id] || '')}</textarea>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-2);margin-bottom:4px">What this section does</div>
+            <textarea class="input section-instructions-input" data-id="${s.id}" rows="4"
+              style="width:100%;resize:vertical;font-size:12px;line-height:1.6"
+              placeholder="Describe, in plain language, what the AI should produce for this section. This text drives the output — e.g. 'Summarize each local story in 2–3 sentences, always name the neighborhood, end with why residents should care.'"
+            >${escHtml(s.instructions || '')}</textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+              <span style="font-size:11px;color:var(--text-3)">Shape:</span>
+              <select class="input input-sm" onchange="setSectionTemplateField('${s.id}','mode',this.value)" title="How the section is built from articles" style="width:auto;font-size:11px;padding:3px 6px">
+                <option value="digest" ${s.mode === 'digest' ? 'selected' : ''}>Digest — one line per story</option>
+                <option value="synthesis" ${s.mode === 'synthesis' ? 'selected' : ''}>Synthesis — one piece from all sources</option>
+                <option value="perArticle" ${(!s.mode || s.mode === 'perArticle') ? 'selected' : ''}>Per story — one item per article</option>
+              </select>
+              <select class="input input-sm" onchange="setSectionTemplateField('${s.id}','format',this.value)" title="Output format" style="width:auto;font-size:11px;padding:3px 6px">
+                <option value="prose" ${(!s.format || s.format === 'prose') ? 'selected' : ''}>Prose</option>
+                <option value="bullets" ${s.format === 'bullets' ? 'selected' : ''}>Bullets</option>
+              </select>
+              <select class="input input-sm" onchange="setSectionTemplateField('${s.id}','length',this.value)" title="Target length" style="width:auto;font-size:11px;padding:3px 6px">
+                <option value="short" ${s.length === 'short' ? 'selected' : ''}>Short</option>
+                <option value="medium" ${(!s.length || s.length === 'medium') ? 'selected' : ''}>Medium</option>
+                <option value="long" ${s.length === 'long' ? 'selected' : ''}>Long</option>
+              </select>
+            </div>
           </div>`).join('')}
         </div>
         <button class="btn btn-outline btn-sm" data-action="add-section-default" style="margin-top:14px">+ Add a section</button>`}
@@ -3076,13 +3096,14 @@ function looksLikeRefusal(text) {
 }
 
 async function generateLeadStory(sectionId) {
-  const { action, noun } = synthConfig(sectionId);
+  const { noun } = synthConfig(sectionId);
+  const action = 'section'; // prompt composed server-side from the section's config
   const entry = getLeadEntry(sectionId, true);
   const sources = entry._sources || [];
   if (!sources.length) { toast('Add at least one article first', 'warn'); return; }
   entry.loading = true; entry.editing = false;
   refreshSectionContent(sectionId);
-  const opts = { prompt: effectivePrompt(sectionId), contents: sources };
+  const opts = { prompt: effectivePrompt(sectionId), contents: sources, section: sectionConfigFor(sectionId) };
   try {
     await hydrateAll(sources); // ensure full source text before synthesizing
 
@@ -3334,7 +3355,13 @@ async function changeSectionType(sectionId, newType) {
     }
   }
 
-  state.newsletter.sectionMeta[sectionId].type = newType;
+  const preset = SECTION_MODE_PRESETS[newType] || SECTION_MODE_PRESETS.generic;
+  const oldPreset = SECTION_MODE_PRESETS[oldType] || SECTION_MODE_PRESETS.generic;
+  Object.assign(state.newsletter.sectionMeta[sectionId], {
+    type: newType, mode: preset.mode, format: preset.format, length: preset.length,
+  });
+  // Unedited preset instructions follow the new style; an editor-written brief survives.
+  if ((meta.instructions || '') === oldPreset.instructions) meta.instructions = preset.instructions;
   state.newsletter.sections[sectionId] = [];
   if (oldType === 'briefing') state.newsletter.topStoriesContent = '';
   refreshSection(sectionId);
@@ -3365,11 +3392,13 @@ async function generateTopStories() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action: 'top-stories',
+        action: 'section',
         contents: articles,
         tone: state.tone,
-        prompt: state.newsletter.prompts[briefingId] || '',
+        prompt: effectivePrompt(briefingId),
         brandVoice: state.brandVoice,
+        audienceAvatar: state.audienceAvatar,
+        section: sectionConfigFor(briefingId),
       }),
     });
     const data = await res.json();
@@ -4069,11 +4098,90 @@ async function deleteNewsletter(id) {
   render();
 }
 
+// ── Config-driven sections ────────────────────────────────────────────────────
+// A section is config: {name, type, mode, format, length, instructions}.
+// mode/format/length set the SHAPE; `instructions` (edited in Settings) sets
+// the SUBSTANCE and is sent to the server, which composes the prompt from it.
+// The preset instructions below grandfather the old hard-coded server prompts
+// so migrated sections keep producing what they always did — now editable.
+const SECTION_MODE_PRESETS = {
+  briefing: {
+    mode: 'digest', format: 'bullets', length: 'short',
+    instructions: "One line per story. Lead with the single hardest number, percentage, or dollar figure — if no number exists, the sharpest specific fact — then a brief phrase of context. Pick one emoji that fits each story's topic. End each line with the story's source URL.",
+  },
+  lead: {
+    mode: 'synthesis', format: 'prose', length: 'long',
+    instructions: "Write the issue's lead story like a wire-service report. Open with the sharpest specific fact or number — never scene-setting. Corroborate facts across the sources, attribute inline with markdown links to the outlets that reported them, and note where accounts meaningfully differ. Place the news in context with a specific comparison. If you have a take, state it as a claim. End on a concrete forward-looking detail — a date, a number, or a pending decision — and finish with a Sources line listing every outlet as markdown links.",
+  },
+  hits: {
+    mode: 'synthesis', format: 'bullets', length: 'short',
+    instructions: "A scannable bulleted list: one line per story. Lead each line with the hardest number, stat, or sharpest specific fact — no bold titles, no inline links. After the bullets, one final line starting with 'Sources: ' listing each story's outlet as a markdown link, in order.",
+  },
+  cta: {
+    mode: 'perArticle', format: 'prose', length: 'short',
+    instructions: "Write a call-to-action that converts: 2–3 sentences that read as a natural extension of the newsletter's voice, never a sales pitch bolted on at the end. Be specific about what the reader gets. One clear action. No bolded lede phrase and no Read-more link.",
+  },
+  generic: {
+    mode: 'perArticle', format: 'prose', length: 'medium',
+    instructions: "A tight newsletter blurb for each story that reads like a wire-service brief: open with a short bolded lede phrase (2–5 words, the news in a nutshell), then two or three sentences leading with the most concrete fact. End with a Read-more link to the article.",
+  },
+};
+
+// Render/storage shape is still keyed by legacy `type` — derive it from config.
+function typeForConfig(mode, format) {
+  if (mode === 'digest') return 'briefing';
+  if (mode === 'synthesis') return format === 'bullets' ? 'hits' : 'lead';
+  return 'generic';
+}
+
+// Fill config fields on a legacy meta entry. Grandfather clause: the section's
+// old standing default prompt (Settings) is folded into `instructions` so
+// nothing the user wrote is lost — it just becomes editable in one place.
+function ensureSectionConfig(meta, id) {
+  if (!meta || meta.mode) return;
+  const preset = SECTION_MODE_PRESETS[meta.type] || SECTION_MODE_PRESETS.generic;
+  meta.mode = preset.mode;
+  meta.format = preset.format;
+  meta.length = preset.length;
+  if (meta.instructions === undefined) {
+    const dp = state.defaultPrompts || {};
+    const userDefault = (dp._layout?.prompts?.[id] || dp[id] || dp[meta.type] || '').trim();
+    meta.instructions = userDefault
+      ? `${preset.instructions}\n\n${userDefault}`
+      : preset.instructions;
+  }
+}
+
+function migrateSectionConfigs() {
+  const layoutMeta = state.defaultPrompts?._layout?.meta;
+  if (layoutMeta) for (const id of Object.keys(layoutMeta)) ensureSectionConfig(layoutMeta[id], id);
+  const nlMeta = state.newsletter?.sectionMeta;
+  if (nlMeta) for (const id of Object.keys(nlMeta)) ensureSectionConfig(nlMeta[id], id);
+}
+
+// The config sent to the server with action 'section'. Prefer the newsletter's
+// own meta; fall back to the Settings template for fields it lacks.
+function sectionConfigFor(sectionId) {
+  const meta = state.newsletter.sectionMeta?.[sectionId] || {};
+  ensureSectionConfig(meta, sectionId);
+  const tpl = state.defaultPrompts?._layout?.meta?.[sectionId] || {};
+  return {
+    name: meta.name || tpl.name || sectionId,
+    mode: meta.mode || tpl.mode || 'perArticle',
+    format: meta.format || tpl.format || 'prose',
+    length: meta.length || tpl.length || 'medium',
+    instructions: (tpl.instructions !== undefined ? tpl.instructions : meta.instructions) || '',
+  };
+}
+
 function effectivePrompt(sectionId) {
   // Two layers, COMBINED at generation time:
   //   - Settings template prompt (standing style guide, per publication)
   //   - Builder per-issue prompt (the unique angle for THIS issue only)
   const issueAngle = (state.newsletter.prompts[sectionId] || '').trim();
+  // Config-driven sections carry their standing instructions in the section
+  // config itself (sent separately as `section`) — only the issue angle goes here.
+  if (sectionConfigFor(sectionId).instructions) return issueAngle;
   let standingStyle = '';
   if (state.defaultPrompts?.[sectionId]) {
     standingStyle = state.defaultPrompts[sectionId];
@@ -4107,6 +4215,7 @@ function getUserSections() {
   const dp = state.defaultPrompts || {};
   if (dp._layout?.order?.length) {
     return dp._layout.order.map(id => ({
+      ...(dp._layout.meta?.[id] || {}), // mode/format/length/instructions
       id,
       name: dp._layout.meta?.[id]?.name || id,
       type: dp._layout.meta?.[id]?.type || 'generic',
@@ -4131,7 +4240,14 @@ function setUserSections(sections) {
   if (!state.defaultPrompts) state.defaultPrompts = {};
   const order = sections.map(s => s.id);
   const meta = {};
-  for (const s of sections) meta[s.id] = { name: s.name, type: s.type || 'generic' };
+  for (const s of sections) {
+    meta[s.id] = {
+      ...(state.defaultPrompts._layout?.meta?.[s.id] || {}), // keep mode/format/length/instructions
+      ...s,
+      name: s.name, type: s.type || 'generic',
+    };
+    delete meta[s.id].id;
+  }
   const prevPrompts = state.defaultPrompts._layout?.prompts || {};
   const prompts = {};
   for (const s of sections) prompts[s.id] = state.defaultPrompts[s.id] || prevPrompts[s.id] || '';
@@ -4152,8 +4268,33 @@ function addSectionDefault() {
   const name = (window.prompt('New section name (e.g. "All Things Camden"):') || '').trim();
   if (!name) return;
   const sections = getUserSections();
-  sections.push({ id: 'custom_' + uid(), name, type: inferSectionType(name) });
+  const type = inferSectionType(name);
+  const preset = SECTION_MODE_PRESETS[type] || SECTION_MODE_PRESETS.generic;
+  sections.push({ id: 'custom_' + uid(), name, type, ...preset });
   setUserSections(sections);
+}
+
+// Edit one config field on a template section (Settings UI). Changing the
+// shape re-derives the legacy render type so the builder renders it correctly.
+function setSectionTemplateField(id, key, value) {
+  const meta = state.defaultPrompts?._layout?.meta?.[id];
+  if (!meta) return;
+  meta[key] = value;
+  if (key === 'mode' || key === 'format') meta.type = typeForConfig(meta.mode, meta.format);
+  scheduleSettingsSave();
+  render();
+}
+window.setSectionTemplateField = setSectionTemplateField;
+
+function moveSectionDefault(id, dir) {
+  const order = state.defaultPrompts?._layout?.order;
+  if (!order) return;
+  const i = order.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  scheduleSettingsSave();
+  render();
 }
 
 function removeSectionDefault(id) {
@@ -4165,15 +4306,14 @@ function removeSectionDefault(id) {
 async function applyPrompt(sectionId) {
   const articles = state.newsletter.sections[sectionId];
   if (!articles.length) { toast('No articles in this section yet', 'warn'); return; }
-  const typeToAction = { lead: 'lead-story', hits: 'quick-hit', cta: 'cta', generic: 'quick-hit' };
-  const action = typeToAction[state.newsletter.sectionMeta[sectionId]?.type] || 'quick-hit';
   const prompt = effectivePrompt(sectionId);
+  const section = { ...sectionConfigFor(sectionId), mode: 'perArticle' }; // one item per article here
   articles.forEach(a => { a.loading = true; });
   refreshSectionContent(sectionId);
   for (const article of articles) {
     try {
       await hydrateArticleText(article);
-      article.content = await callAI(action, article, { prompt });
+      article.content = await callAI('section', article, { prompt, section });
     } catch (e) { article.content = article.content || '(Failed)'; }
     article.loading = false;
     refreshSectionContent(sectionId);
@@ -4798,6 +4938,7 @@ async function callAI(action, content, options = {}) {
       audienceAvatar: state.audienceAvatar,
       userId: state.user?.id || '',
       authToken,
+      section: options.section || undefined,
     }),
   });
   const data = await res.json();
@@ -4827,6 +4968,7 @@ async function callAIStream(action, content, options = {}, onDelta) {
       audienceAvatar: state.audienceAvatar,
       userId: state.user?.id || '',
       authToken,
+      section: options.section || undefined,
       stream: true,
     }),
   });
@@ -5339,7 +5481,8 @@ function confirmAddSection() {
   if (!name) { toast('Enter a section name', 'warn'); return; }
   const id = 'custom_' + uid();
   state.newsletter.sectionOrder.push(id);
-  state.newsletter.sectionMeta[id] = { name, type };
+  const preset = SECTION_MODE_PRESETS[type] || SECTION_MODE_PRESETS.generic;
+  state.newsletter.sectionMeta[id] = { name, type, ...preset };
   state.newsletter.sections[id] = [];
   state.newsletter.prompts[id] = '';
   closeModal();
@@ -6137,7 +6280,7 @@ function resetNewsletter() {
     const meta = {};
     for (const id of layout.order) {
       const m = layout.meta?.[id] || { name: id, type: 'generic' };
-      meta[id] = { name: m.name || id, type: m.type || 'generic' };
+      meta[id] = { ...m, name: m.name || id, type: m.type || 'generic' }; // carries mode/format/length/instructions
       sections[id] = [];
       prompts[id] = ''; // Issue-angle field starts EMPTY. Settings default is combined at generation time via effectivePrompt().
     }
