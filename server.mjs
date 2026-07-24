@@ -1335,6 +1335,7 @@ const TEMPERATURE = {
   'summarize': 0.3,
   'cta': 0.7,
   'subject-line': 0.9,
+  'subject-lines': 0.9,
   'preview-text': 0.8,
   'hooks': 0.95,
   'brand-voice': 0.4,
@@ -1433,6 +1434,8 @@ function mockResponse(action, content, contents = [], sectionCfg = null) {
 
     'subject-line': `1. "${title.slice(0, 48)}"\n2. "What you're not hearing about ${source}"\n3. "The story behind the story (${source})"`,
 
+    'subject-lines': Array.from({ length: 8 }, (_, i) => `Mock subject option ${i + 1}: ${title.slice(0, 40)}`).join('\n'),
+
     'preview-text': `Here's what's actually happening — and why it changes more than you think...`,
 
     'rewrite': `${title}: ${summary} Industry observers watching this space note the significance goes beyond the immediate headline. The structural implications will take time to fully materialize, but early signals suggest meaningful change is underway. What to watch: the next 30 days of follow-on decisions will reveal how deep this runs.`,
@@ -1465,6 +1468,7 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     userId = '',
     authToken = '',
     section: sectionCfg = null,
+    count = 0,       // subject-lines: how many options to produce
   } = req.body;
 
   if (!anthropic) {
@@ -1599,6 +1603,14 @@ Output ONLY the bullet lines followed by the single Sources line — no intro, n
         user: `Write the Quick Hits list for these ${items.length} articles${customPrompt ? `. ${customPrompt}` : ''}:\n\n${articleList}`,
       };
     })(),
+    // Subject Line Generator panel: the client-supplied evergreen prompt IS the
+    // base instruction; the server only pins output shape and count.
+    'subject-lines': {
+      system: `${customPrompt || 'Write newsletter email subject lines. Output only the lines, one per line, no numbering or commentary. Curiosity-driven, short, punchy, declarative. Vary the angle across the batch.'}
+
+Output EXACTLY ${Math.min(Math.max(Number(count) || 8, 1), 20)} subject lines, one per line. No numbering, no quotes, no labels, no commentary. Only use facts that appear in the content — never invent a number or claim.`,
+      user: `Write the subject lines for this newsletter content:\n\n${(content.text || content.summary || '').slice(0, 3000)}`,
+    },
     'subject-line': {
       system: `You are a newsletter growth expert who has studied thousands of high-performing subject lines. You write subject lines that get opened.
 

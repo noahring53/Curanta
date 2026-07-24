@@ -42,7 +42,8 @@ const state = {
     device: 'desktop',
     darkMode: true,
   },
-  rightPanel: 'ai',       // 'ai' | 'design' | 'team'
+  rightPanel: 'ai',       // 'ai' | 'design' | 'team' | 'subjects'
+  subjectStudio: { input: '', source: '', results: [], loading: false, settingsOpen: false },
   aiLoading: false,
   aiHistory: [],
   aiResult: null,
@@ -430,6 +431,10 @@ function handleClick(e) {
     case 'ai-hooks':        aiHooks(); break;
     case 'ai-cta':          aiCTA(); break;
     case 'generate-subjects': generateSubjectLines(); break;
+    case 'subjects-generate': generateSubjectStudio(); break;
+    case 'subjects-copy':     copySubjectLine(Number(d.idx)); break;
+    case 'subjects-toggle-settings': state.subjectStudio.settingsOpen = !state.subjectStudio.settingsOpen; refreshSubjectsPanel(); break;
+    case 'subjects-save-settings': scheduleSettingsSave(); toast('Subject settings saved', 'success'); break;
     case 'generate-preview':  generatePreviewText(); break;
     case 'generate-brand-voice': generateBrandVoice(); break;
     case 'toggle-theme':    toggleTheme(); break;
@@ -479,6 +484,8 @@ function handleInput(e) {
   else if (t.matches('#color-picker')) { state.design.primaryColor = t.value; scheduleSettingsSave(); applyDesignSettings(); }
   else if (t.matches('#brand-voice-samples')) state.brandVoiceSamples = t.value;
   else if (t.matches('#audience-avatar')) { state.audienceAvatar = t.value; scheduleSettingsSave(); }
+  else if (t.matches('#subject-evergreen')) { subjectSettings().evergreen = t.value; scheduleSettingsSave(); }
+  else if (t.matches('#subject-count')) { subjectSettings().count = Math.min(Math.max(parseInt(t.value) || 8, 1), 20); scheduleSettingsSave(); }
   else if (t.matches('.default-prompt-input')) {
     const key = t.dataset.type;
     if (!state.defaultPrompts) state.defaultPrompts = {};
@@ -2171,6 +2178,20 @@ function renderSettingsPage() {
         <div style="font-size:11px;color:var(--text-3);margin-top:5px">Saves automatically. The more specific you are, the better the writing.</div>
       </div>
 
+      <!-- ── SUBJECT LINE GENERATOR ── -->
+      <div class="settings-section" id="subject-generator-settings">
+        <div class="settings-section-title">Subject Line Generator</div>
+        <div class="settings-section-sub">The <strong>evergreen prompt</strong> is the standing instruction prepended to every subject-line generation in the builder's Subjects panel. Edit it here or in the panel's ⚙ — same setting.</div>
+        <textarea id="subject-evergreen" class="input" rows="10"
+          style="width:100%;resize:vertical;font-size:13px;line-height:1.7;margin-top:14px;font-family:inherit"
+        >${escHtml(subjectSettings().evergreen)}</textarea>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <label style="font-size:12px;color:var(--text-2)">Options per batch</label>
+          <input type="number" id="subject-count" min="1" max="20" value="${subjectSettings().count}" class="input input-sm" style="width:70px">
+        </div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:5px">Saves automatically. Takes effect on the next generation.</div>
+      </div>
+
       <!-- ── SECTION DEFAULTS ── -->
       ${(() => {
         const userSections = getUserSections();
@@ -2410,6 +2431,7 @@ function renderBuilder() {
     <aside class="right-panel" id="right-panel">
       <div class="panel-tabs">
         <button class="panel-tab ${state.rightPanel === 'ai' ? 'active' : ''}" data-action="switch-panel" data-panel="ai">Generate</button>
+        <button class="panel-tab ${state.rightPanel === 'subjects' ? 'active' : ''}" data-action="switch-panel" data-panel="subjects">Subjects</button>
         <button class="panel-tab ${state.rightPanel === 'design' ? 'active' : ''}" data-action="switch-panel" data-panel="design">Design</button>
         <button class="panel-tab ${state.rightPanel === 'team' ? 'active' : ''}" data-action="switch-panel" data-panel="team">Team</button>
       </div>
@@ -4361,9 +4383,15 @@ function switchPanel(panel) {
 
 function renderPanelContent() {
   if (state.rightPanel === 'ai') return renderAIPanel();
+  if (state.rightPanel === 'subjects') return renderSubjectsPanel();
   if (state.rightPanel === 'design') return renderDesignPanel();
   if (state.rightPanel === 'team') return renderTeamPanel();
   return '';
+}
+
+function refreshSubjectsPanel() {
+  const body = document.getElementById('panel-body');
+  if (body && state.rightPanel === 'subjects') body.innerHTML = renderSubjectsPanel();
 }
 
 function updateDesignPanel() {
@@ -4883,6 +4911,130 @@ async function generatePreviewText() {
   state.aiLoading = false; refreshAIPanel();
 }
 
+// ── SUBJECT LINE GENERATOR PANEL ──────────────────────────────────────────────
+const DEFAULT_SUBJECT_EVERGREEN = `Write newsletter email subject lines. Output only the lines, one per line, no numbering or commentary.
+- Curiosity-driven, make them need to open it.
+- Lead with the named subject when there is one.
+- Short, punchy, declarative. No em dashes. No semicolons.
+- No clickbait the story won't pay off.
+- Vary the angle across the batch.`;
+
+// Settings ride the existing defaultPrompts persistence (Supabase + LS cache)
+// under a reserved key, like _layout does.
+function subjectSettings() {
+  if (!state.defaultPrompts._subjects) {
+    state.defaultPrompts._subjects = { evergreen: DEFAULT_SUBJECT_EVERGREEN, count: 8 };
+  }
+  return state.defaultPrompts._subjects;
+}
+
+function renderSubjectsPanel() {
+  const s = state.subjectStudio;
+  const cfg = subjectSettings();
+  const sectionOpts = state.newsletter.sectionOrder.map(id => {
+    const name = state.newsletter.sectionMeta[id]?.name || id;
+    return `<option value="${escHtml(id)}" ${s.source === id ? 'selected' : ''}>${escHtml(name)}</option>`;
+  }).join('');
+  return `
+<div class="panel-section">
+  <div class="panel-section-title">Subject Line Generator</div>
+  <select class="input input-sm" style="width:100%;margin-bottom:6px" onchange="pullSubjectSource(this.value)">
+    <option value="">— Pull from draft section… —</option>
+    <option value="__issue" ${s.source === '__issue' ? 'selected' : ''}>Whole issue</option>
+    ${sectionOpts}
+  </select>
+  <textarea class="input input-sm" rows="6" placeholder="Paste or pull the content to write subject lines for…"
+    oninput="state.subjectStudio.input=this.value"
+    style="width:100%;box-sizing:border-box;resize:vertical;font-size:12px;margin-bottom:6px">${escHtml(s.input)}</textarea>
+  <button class="btn btn-primary btn-sm" style="width:100%;justify-content:center" data-action="subjects-generate" ${s.loading ? 'disabled' : ''}>
+    ${s.loading ? '⏳ Generating…' : s.results.length ? '↺ Regenerate' : '✦ Generate subject lines'}
+  </button>
+</div>
+${s.results.length ? `
+<div class="panel-section">
+  <div class="panel-section-title">${s.results.length} options — click ⎘ to copy</div>
+  <div style="display:flex;flex-direction:column;gap:8px">
+    ${s.results.map((line, i) => `
+    <div style="border:1px solid var(--border-md);border-radius:var(--r-md);padding:8px 10px">
+      <div style="display:flex;align-items:flex-start;gap:6px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12.5px;font-weight:700;color:var(--text-1);line-height:1.4">${escHtml(line)}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:3px">
+            <span style="color:${line.length > 52 ? 'var(--red)' : 'var(--text-3)'}">${line.length} chars${line.length > 52 ? ' — may truncate' : ''}</span>
+          </div>
+          <div style="margin-top:5px;padding:6px 8px;background:var(--bg-3);border-radius:6px;font-size:11px;line-height:1.4;overflow:hidden">
+            <span style="font-weight:700;color:var(--text-2)">${escHtml(state.newsletter.title || 'Your Newsletter')}</span><br>
+            <span style="font-weight:600;color:var(--text-1)">${escHtml(line)}</span>
+            <span style="color:var(--text-3)"> — ${escHtml(s.input.replace(/\s+/g, ' ').slice(0, 80))}…</span>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" data-action="subjects-copy" data-idx="${i}" title="Copy this subject line" style="padding:2px 7px;flex-shrink:0">⎘</button>
+      </div>
+    </div>`).join('')}
+  </div>
+</div>` : ''}
+<div class="panel-section">
+  <div class="panel-section-title" style="cursor:pointer" data-action="subjects-toggle-settings">⚙ Prompt settings ${s.settingsOpen ? '▾' : '▸'}</div>
+  ${s.settingsOpen ? `
+  <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Evergreen prompt — always prepended to every generation</div>
+  <textarea class="input input-sm" rows="7"
+    oninput="subjectSettings().evergreen=this.value"
+    style="width:100%;box-sizing:border-box;resize:vertical;font-size:11.5px;margin-bottom:6px">${escHtml(cfg.evergreen)}</textarea>
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+    <span style="font-size:11px;color:var(--text-3)">Options per batch</span>
+    <input type="number" min="1" max="20" value="${cfg.count}" class="input input-sm" style="width:60px"
+      onchange="subjectSettings().count=Math.min(Math.max(parseInt(this.value)||8,1),20)">
+  </div>
+  <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center" data-action="subjects-save-settings">Save settings</button>
+  <div style="text-align:center;margin-top:6px"><span style="font-size:11px;color:var(--accent);cursor:pointer" data-action="navigate" data-view="settings">Edit in Settings →</span></div>
+  ` : ''}
+</div>`;
+}
+
+// Pull a section's current text into the input (read-only on the draft).
+function pullSubjectSource(id) {
+  state.subjectStudio.source = id;
+  if (!id) return;
+  const text = id === '__issue'
+    ? state.newsletter.sectionOrder.map(sid => {
+        const name = state.newsletter.sectionMeta[sid]?.name || sid;
+        const t = sectionTextById(sid);
+        return t ? `${name}:\n${t}` : '';
+      }).filter(Boolean).join('\n\n')
+    : sectionTextById(id);
+  if (!text) { toast('That section has no content yet', 'warn'); return; }
+  state.subjectStudio.input = markdownToPlainText(text).slice(0, 3000);
+  refreshSubjectsPanel();
+}
+
+async function generateSubjectStudio() {
+  const s = state.subjectStudio;
+  if (!s.input.trim()) { toast('Pull a section or paste some content first', 'warn'); return; }
+  const cfg = subjectSettings();
+  s.loading = true; refreshSubjectsPanel();
+  try {
+    const raw = await callAI('subject-lines', { text: s.input, title: state.newsletter.title },
+      { prompt: cfg.evergreen, count: cfg.count });
+    s.results = raw.split('\n')
+      .map(l => l.replace(/^\d+[\.\)]\s*/, '').replace(/^["']|["']$/g, '').trim())
+      .filter(Boolean);
+    if (!s.results.length) toast('No lines came back — try again', 'error');
+  } catch (e) {
+    if (!['subscription_required', 'generation_limit'].includes(e.message)) {
+      toast(e.message === 'Failed to fetch' ? 'Network error — check your connection and retry' : e.message, 'error');
+    }
+  }
+  s.loading = false; refreshSubjectsPanel();
+}
+
+function copySubjectLine(idx) {
+  const line = state.subjectStudio.results[idx];
+  if (!line) return;
+  navigator.clipboard.writeText(line)
+    .then(() => toast('Subject line copied', 'success'))
+    .catch(() => toast('Copy failed', 'error'));
+}
+
 function renderVoiceBadge() {
   if (!state.brandVoice) {
     return `<div class="badge badge-default" style="cursor:pointer" data-action="navigate" data-view="settings" title="No brand voice set — go to Settings to add one">🎙 No voice</div>`;
@@ -4939,6 +5091,7 @@ async function callAI(action, content, options = {}) {
       userId: state.user?.id || '',
       authToken,
       section: options.section || undefined,
+      count: options.count || undefined,
     }),
   });
   const data = await res.json();
