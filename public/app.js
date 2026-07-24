@@ -2917,6 +2917,15 @@ function renderEditorSections() {
   </div>`;
 }
 
+// Copy bar shown above every section — one button per section, always visible.
+// Copies the section as rich text (formatting + live links); warns if empty.
+function sectionCopyBarHtml(sectionId) {
+  return `
+  <div class="section-copy-bar" style="display:flex;justify-content:flex-end;margin-bottom:4px">
+    <button class="btn btn-outline btn-sm" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="font-size:11px;padding:3px 10px">⎘ Copy section</button>
+  </div>`;
+}
+
 function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today's Briefing") {
   const articles = state.newsletter.sections[sectionId] || [];
   const content  = state.newsletter.topStoriesContent;
@@ -2929,6 +2938,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
   ondragend="sectionDragEnd(event)"
   ondragover="sectionDragOver(event,'${sectionId}')"
   ondrop="sectionDrop(event,'${sectionId}')">
+  ${sectionCopyBarHtml(sectionId)}
   <div class="section-header">
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(sectionName)}</span>
@@ -2940,7 +2950,6 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, 'briefing')}
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
-      ${content ? `<button class="btn btn-sm btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="padding:2px 6px">⎘</button>` : ''}
       <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -3138,6 +3147,7 @@ function renderLeadSection(sectionId, label) {
   ondragend="sectionDragEnd(event)"
   ondragover="sectionDragOver(event,'${sectionId}')"
   ondrop="sectionDrop(event,'${sectionId}')">
+  ${sectionCopyBarHtml(sectionId)}
   <div class="section-header">
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
@@ -3146,7 +3156,6 @@ function renderLeadSection(sectionId, label) {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, cfg.type)}
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
-      ${(entry?.content || entry?.summary) ? `<button class="btn btn-sm btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="padding:2px 6px">⎘</button>` : ''}
       <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -3247,6 +3256,7 @@ function renderSection(sectionId, label, type = 'hits') {
   ondragend="sectionDragEnd(event)"
   ondragover="sectionDragOver(event,'${sectionId}')"
   ondrop="sectionDrop(event,'${sectionId}')">
+  ${sectionCopyBarHtml(sectionId)}
   <div class="section-header">
     <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
     <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
@@ -3255,7 +3265,6 @@ function renderSection(sectionId, label, type = 'hits') {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, type)}
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
-      ${articles.some(a => (a.content || a.summary || '').trim()) ? `<button class="btn btn-sm btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="padding:2px 6px">⎘</button>` : ''}
       <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
