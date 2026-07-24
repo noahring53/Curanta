@@ -435,10 +435,9 @@ function handleClick(e) {
     case 'show-preview':    showPreview(); break;
     case 'close-preview':   closePreview(); break;
     case 'copy-html':       copyHTML(); break;
-    case 'copy-rich':       copyRichText(); break;
+    case 'copy-section':    copySection(d.sectionId); break;
+    case 'copy-sections-modal': showCopySectionsModal(); break;
     case 'export-json':     exportJSON(); break;
-    case 'copy-beehiiv-section': copyBeehiivSection(d.section); break;
-    case 'beehiiv-paste-modal': showBeehiivPasteModal(); break;
     case 'mock-sync':       d.platform === 'beehiiv' ? publishToBeehiiv() : mockSync(d.platform); break;
     case 'request-review':  setApproval('review'); break;
     case 'approve':         setApproval('approved'); break;
@@ -2356,7 +2355,7 @@ function renderBuilder() {
     <div class="builder-topbar-right">
       <button class="btn btn-ghost btn-sm" data-action="show-preview">⊙ Preview</button>
       <button class="btn btn-outline btn-sm" data-action="export-json">↓ JSON</button>
-      <button class="btn btn-primary btn-sm" data-action="copy-rich" title="Paste into any newsletter editor — formatting and links preserved">⎘ Copy for Editor</button>
+      <button class="btn btn-primary btn-sm" data-action="copy-sections-modal" title="Copy each section separately — paste into your editor with formatting and links">⎘ Copy sections</button>
     </div>
   </header>
 
@@ -2941,6 +2940,7 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, 'briefing')}
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
+      ${content ? `<button class="btn btn-sm btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="padding:2px 6px">⎘</button>` : ''}
       <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -3146,6 +3146,7 @@ function renderLeadSection(sectionId, label) {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, cfg.type)}
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
+      ${(entry?.content || entry?.summary) ? `<button class="btn btn-sm btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="padding:2px 6px">⎘</button>` : ''}
       <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -3254,6 +3255,7 @@ function renderSection(sectionId, label, type = 'hits') {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, type)}
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
+      ${articles.some(a => (a.content || a.summary || '').trim()) ? `<button class="btn btn-sm btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="padding:2px 6px">⎘</button>` : ''}
       <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
       ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
     </div>
@@ -4904,7 +4906,7 @@ function renderDesignPanel() {
 <div class="panel-section">
   <div class="panel-section-title">Export</div>
   <div style="display:flex;flex-direction:column;gap:5px">
-    <button class="ai-action-btn" data-action="copy-rich" title="Paste into any newsletter editor — formatting and links preserved"><span class="ai-action-icon">⎘</span> Copy for Editor</button>
+    <button class="ai-action-btn" data-action="copy-sections-modal" title="Copy each section separately — paste into your editor with formatting and links"><span class="ai-action-icon">⎘</span> Copy sections</button>
     <button class="ai-action-btn" data-action="copy-html" title="Raw email HTML for platforms with an HTML import"><span class="ai-action-icon">&lt;&gt;</span> Copy HTML</button>
     <button class="ai-action-btn" data-action="export-json"><span class="ai-action-icon">↓</span> Export JSON</button>
   </div>
@@ -4913,7 +4915,7 @@ function renderDesignPanel() {
 <div class="panel-section">
   <div class="panel-section-title">Publish to</div>
   <div style="display:flex;flex-direction:column;gap:5px">
-    <button class="integration-btn" data-action="beehiiv-paste-modal">🐝 Copy for Beehiiv</button>
+    <button class="integration-btn" data-action="copy-sections-modal">🐝 Copy for Beehiiv</button>
     <button class="integration-btn" data-action="mock-sync" data-platform="beehiiv" style="font-size:11px;opacity:0.7">🐝 API: Push draft to Beehiiv</button>
     <button class="integration-btn" data-action="mock-sync" data-platform="mailchimp">📧 Sync to Mailchimp</button>
     <button class="integration-btn" data-action="mock-sync" data-platform="kit">💌 Sync to Kit</button>
@@ -5018,7 +5020,7 @@ function showPreview() {
     <div class="preview-modal-toolbar">
       <div class="preview-modal-title">${escHtml(state.newsletter.title)}</div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary btn-sm" data-action="copy-rich" title="Paste into any newsletter editor — formatting and links preserved">⎘ Copy for Editor</button>
+        <button class="btn btn-primary btn-sm" data-action="copy-sections-modal" title="Copy each section separately — paste into your editor with formatting and links">⎘ Copy sections</button>
         <button class="btn btn-outline btn-sm" data-action="copy-html">⎘ Copy HTML</button>
         <button class="btn btn-ghost btn-sm" data-action="close-preview">✕ Close</button>
       </div>
@@ -5180,33 +5182,24 @@ function markdownToPlainText(text) {
     .trim();
 }
 
-function buildRichClipboardParts() {
+// Rich html + plain text for ONE section — content only, no section heading,
+// since it's pasted into a slot the platform already labels.
+function buildSectionRichParts(sectionId) {
   const nl = state.newsletter;
-  const sectionOrder = nl.sectionOrder || ['topStories', 'leadStory', 'quickHits', 'cta'];
-  const sectionMeta  = nl.sectionMeta  || {};
-  const htmlParts = [];
-  const textParts = [];
-
-  const briefing = nl.topStoriesContent?.trim();
-  if (briefing) {
-    const name = sectionMeta.topStories?.name || "Today's Briefing";
-    htmlParts.push(`<h2>${escHtml(name)}</h2>` + briefing.split('\n').filter(l => l.trim())
-      .map(line => `<p>${linkifyUrls(escHtml(line))}</p>`).join(''));
-    textParts.push(name.toUpperCase() + '\n\n' + briefing);
+  if (nl.sectionMeta?.[sectionId]?.type === 'briefing' || sectionId === 'topStories') {
+    const briefing = (nl.topStoriesContent || '').trim();
+    if (!briefing) return { html: '', text: '' };
+    return {
+      html: briefing.split('\n').filter(l => l.trim())
+        .map(line => `<p>${linkifyUrls(escHtml(line))}</p>`).join(''),
+      text: briefing,
+    };
   }
-
-  for (const id of sectionOrder) {
-    if (id === 'topStories') continue;
-    const articles = (nl.sections?.[id] ?? []).filter(a => (a.content || a.summary || '').trim());
-    if (!articles.length) continue;
-    const name = sectionMeta[id]?.name || id;
-    htmlParts.push(`<h2>${escHtml(name)}</h2>` + articles
-      .map(a => `<p>${formatContent((a.content || a.summary).trim())}</p>`).join(''));
-    textParts.push(name.toUpperCase() + '\n\n' + articles
-      .map(a => markdownToPlainText(a.content || a.summary)).join('\n\n'));
-  }
-
-  return { html: htmlParts.join(''), text: textParts.join('\n\n\n') };
+  const articles = (nl.sections?.[sectionId] ?? []).filter(a => (a.content || a.summary || '').trim());
+  return {
+    html: articles.map(a => `<p>${formatContent((a.content || a.summary).trim())}</p>`).join(''),
+    text: articles.map(a => markdownToPlainText(a.content || a.summary)).join('\n\n'),
+  };
 }
 
 function writeRichClipboard(html, text) {
@@ -5233,11 +5226,19 @@ function writeRichClipboard(html, text) {
   });
 }
 
-function copyRichText() {
-  const { html, text } = buildRichClipboardParts();
-  if (!html) { toast('Add some content to your newsletter first', 'warn'); return; }
+function copySection(sectionId) {
+  const { html, text } = buildSectionRichParts(sectionId);
+  if (!html) { toast('This section has no content yet', 'warn'); return; }
+  const name = state.newsletter.sectionMeta?.[sectionId]?.name || 'Section';
   writeRichClipboard(html, text)
-    .then(() => toast('Copied — paste into your newsletter editor, links included', 'success'))
+    .then(() => {
+      toast(`${name} copied — paste into your newsletter editor, links included`, 'success');
+      document.querySelectorAll(`[data-action="copy-section"][data-section-id="${sectionId}"]`).forEach(btn => {
+        const prev = btn.innerHTML;
+        btn.textContent = '✓';
+        setTimeout(() => { btn.innerHTML = prev; }, 1800);
+      });
+    })
     .catch(() => toast('Copy failed', 'error'));
 }
 
@@ -6302,34 +6303,17 @@ function autoFetchSources() {
   });
 }
 
-// ── BEEHIIV PASTE MODAL ───────────────────────────────────────────────────────
-function sectionPlainText(articles) {
-  return articles
-    .map(a => (a.content || a.summary || '').trim())
-    .filter(Boolean)
-    .join('\n\n---\n\n');
-}
-
-function showBeehiivPasteModal() {
+// ── COPY SECTIONS MODAL ───────────────────────────────────────────────────────
+// One card per section with its own copy button — paste each into the matching
+// slot in Beehiiv, Mailchimp, Kit, or Substack. Rich text; links stay live.
+function showCopySectionsModal() {
   const nl = state.newsletter;
   const sectionOrder = nl.sectionOrder || ['topStories', 'leadStory', 'quickHits', 'cta'];
   const sectionMeta  = nl.sectionMeta  || {};
 
-  const hasTopStories = nl.topStoriesContent?.trim();
-  const sections = [];
-
-  if (hasTopStories) {
-    sections.push({ id: 'topStories', name: sectionMeta.topStories?.name || "Today's Briefing", text: nl.topStoriesContent.trim() });
-  }
-
-  for (const id of sectionOrder) {
-    if (id === 'topStories') continue;
-    const articles = nl.sections?.[id] ?? [];
-    if (!articles.length) continue;
-    const text = sectionPlainText(articles);
-    if (!text) continue;
-    sections.push({ id, name: sectionMeta[id]?.name || id, text });
-  }
+  const sections = sectionOrder
+    .map(id => ({ id, name: sectionMeta[id]?.name || id, ...buildSectionRichParts(id) }))
+    .filter(s => s.html);
 
   if (!sections.length) {
     toast('Add some content to your newsletter first', 'warn');
@@ -6342,8 +6326,8 @@ function showBeehiivPasteModal() {
     <div class="modal" style="max-width:640px;padding:0;overflow:hidden">
       <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border-md);display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div class="modal-title" style="margin:0">Copy for Beehiiv</div>
-          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Copy each section and paste directly into Beehiiv's editor — formatting and links are preserved</div>
+          <div class="modal-title" style="margin:0">Copy sections</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Copy each section and paste it into your newsletter editor — formatting and links are preserved</div>
         </div>
         <button class="btn btn-ghost btn-sm" data-action="close-modal" style="font-size:20px;padding:2px 8px">×</button>
       </div>
@@ -6352,40 +6336,14 @@ function showBeehiivPasteModal() {
         <div style="border:1px solid var(--border-md);border-radius:var(--r-md);overflow:hidden">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-3);border-bottom:1px solid var(--border-md)">
             <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-2)">${escHtml(s.name)}</span>
-            <button class="btn btn-outline btn-sm" data-action="copy-beehiiv-section" data-section="${escHtml(s.id)}" style="font-size:11px;padding:4px 10px">⎘ Copy</button>
+            <button class="btn btn-outline btn-sm" data-action="copy-section" data-section-id="${escHtml(s.id)}" style="font-size:11px;padding:4px 10px">⎘ Copy</button>
           </div>
-          <textarea id="beehiiv-text-${escHtml(s.id)}" readonly
-            style="width:100%;box-sizing:border-box;resize:none;border:none;background:var(--bg-2);color:var(--text-1);font-size:13px;line-height:1.7;padding:12px 14px;font-family:inherit;min-height:80px;outline:none"
-            rows="4"
-          >${escHtml(s.text)}</textarea>
+          <div style="background:var(--bg-2);color:var(--text-1);font-size:13px;line-height:1.7;padding:12px 14px;max-height:180px;overflow-y:auto">${s.html}</div>
         </div>`).join('')}
       </div>
     </div>
   </div>`;
   modal.querySelector('#modal-overlay')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
-}
-
-function copyBeehiivSection(sectionId) {
-  const el = document.getElementById(`beehiiv-text-${sectionId}`);
-  if (!el) return;
-  const nl = state.newsletter;
-  let html;
-  if (sectionId === 'topStories') {
-    html = (nl.topStoriesContent || '').split('\n').filter(l => l.trim())
-      .map(line => `<p>${linkifyUrls(escHtml(line))}</p>`).join('');
-  } else {
-    html = (nl.sections?.[sectionId] ?? [])
-      .filter(a => (a.content || a.summary || '').trim())
-      .map(a => `<p>${formatContent((a.content || a.summary).trim())}</p>`).join('');
-  }
-  writeRichClipboard(html, markdownToPlainText(el.value) || el.value)
-    .then(() => {
-      toast('Copied — paste into Beehiiv', 'success');
-      // Flash the button
-      const btn = document.querySelector(`[data-action="copy-beehiiv-section"][data-section="${sectionId}"]`);
-      if (btn) { btn.textContent = '✓ Copied'; setTimeout(() => { btn.innerHTML = '⎘ Copy'; }, 1800); }
-    })
-    .catch(() => toast('Copy failed', 'error'));
 }
 
 // ── BEEHIIV PUBLISH ───────────────────────────────────────────────────────────
