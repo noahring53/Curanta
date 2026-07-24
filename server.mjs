@@ -97,6 +97,9 @@ const rssParser = new Parser({
     'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
     'Accept-Language': 'en-US,en;q=0.9',
   },
+  customFields: {
+    item: [['media:group', 'mediaGroup']], // YouTube feeds keep the video description here
+  },
 });
 
 const anthropic = process.env.ANTHROPIC_API_KEY
@@ -508,6 +511,63 @@ async function fetchArticle(url) {
   };
 }
 
+// ── Feed URL resolver ─────────────────────────────────────────────────────────
+// Turns the page URLs people actually know — a YouTube channel, a subreddit,
+// a Medium profile — into their RSS feed equivalents. Anything unrecognized
+// passes through untouched and takes the normal RSS/article path.
+async function resolveFeedUrl(rawUrl) {
+  let u;
+  try { u = new URL(rawUrl); } catch { return { url: rawUrl, kind: 'rss' }; }
+  const host = u.hostname.toLowerCase().replace(/^(www|m|old|np)\./, '');
+
+  if (host === 'youtube.com') {
+    if (u.pathname.startsWith('/feeds/')) return { url: rawUrl, kind: 'youtube' };
+    const playlist = u.searchParams.get('list');
+    if (playlist && !u.pathname.startsWith('/watch')) {
+      return { url: `https://www.youtube.com/feeds/videos.xml?playlist_id=${playlist}`, kind: 'youtube' };
+    }
+    const chan = u.pathname.match(/^\/channel\/(UC[\w-]+)/);
+    if (chan) return { url: `https://www.youtube.com/feeds/videos.xml?channel_id=${chan[1]}`, kind: 'youtube' };
+    // @handle, /c/Name, /user/Name — fetch the channel page and pull the canonical id
+    if (/^\/(@[\w.-]+|c\/[^/]+|user\/[^/]+)/.test(u.pathname)) {
+      const pagePath = u.pathname.split('/').slice(0, u.pathname.startsWith('/@') ? 2 : 3).join('/');
+      let html = '';
+      try {
+        const page = await fetch(`https://www.youtube.com${pagePath}`, {
+          headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'en-US,en;q=0.9' },
+        });
+        html = await page.text();
+      } catch { /* fall through to the error below */ }
+      // The canonical link always points at THIS page's channel; bare
+      // "channelId" matches can belong to a featured/related channel.
+      const id = html.match(/rel="canonical"\s+href="https:\/\/www\.youtube\.com\/channel\/(UC[\w-]+)"/)
+        || html.match(/"externalId":"(UC[\w-]+)"/)
+        || html.match(/"channelId":"(UC[\w-]+)"/);
+      if (id) return { url: `https://www.youtube.com/feeds/videos.xml?channel_id=${id[1]}`, kind: 'youtube' };
+      throw new Error('Could not find that YouTube channel. Try its /channel/UC… URL instead.');
+    }
+    return { url: rawUrl, kind: 'rss' }; // watch pages etc. — treat as a normal URL
+  }
+
+  if (host === 'reddit.com') {
+    const sub = u.pathname.match(/^\/r\/(\w+)/);
+    if (sub) return { url: `https://www.reddit.com/r/${sub[1]}/.rss`, kind: 'reddit' };
+    const usr = u.pathname.match(/^\/(?:u|user)\/([\w-]+)/);
+    if (usr) return { url: `https://www.reddit.com/user/${usr[1]}/.rss`, kind: 'reddit' };
+    return { url: rawUrl, kind: 'reddit' };
+  }
+
+  if (host === 'medium.com' && !u.pathname.startsWith('/feed/')) {
+    const seg = u.pathname.split('/').filter(Boolean)[0];
+    // Only profiles (@user) and publication roots have feeds — not story URLs
+    if (seg && u.pathname.split('/').filter(Boolean).length === 1) {
+      return { url: `https://medium.com/feed/${seg}`, kind: 'rss' };
+    }
+  }
+
+  return { url: rawUrl, kind: 'rss' };
+}
+
 // ── /api/ingest ───────────────────────────────────────────────────────────────
 app.get('/api/ingest', ingestLimiter, async (req, res) => {
   const { url } = req.query;
@@ -519,17 +579,29 @@ app.get('/api/ingest', ingestLimiter, async (req, res) => {
   try { await assertSafeUrl(url); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
+  // Resolve platform URLs (YouTube channels, subreddits, Medium profiles) to
+  // their RSS equivalents. The resolved URL gets its own SSRF check.
+  let feedUrl = url, kind = 'rss';
+  try {
+    const resolved = await resolveFeedUrl(url);
+    feedUrl = resolved.url;
+    kind = resolved.kind;
+    if (feedUrl !== url) await assertSafeUrl(feedUrl);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
   // Try RSS/Atom first
   try {
-    const feed = await rssParser.parseURL(url);
+    const feed = await rssParser.parseURL(feedUrl);
     const rawItems = feed.items.slice(0, 16);
-    const feedSource = feed.title || new URL(url).hostname.replace(/^www\./, '');
+    const feedSource = feed.title || new URL(feedUrl).hostname.replace(/^www\./, '');
 
     const buildBase = (item) => ({
       id: crypto.randomUUID(),
       title: item.title?.trim() || 'Untitled',
       url: item.link || '',
-      summary: stripHtml(item.contentSnippet || item.content || '').slice(0, 350),
+      summary: stripHtml(item.contentSnippet || item.content || item.mediaGroup?.['media:description']?.[0] || '').slice(0, 350),
       text: '',
       source: feedSource,
       publishedAt: item.pubDate || item.isoDate || new Date().toISOString(),
@@ -552,7 +624,7 @@ app.get('/api/ingest', ingestLimiter, async (req, res) => {
       }));
     }
 
-    return res.json({ type: 'feed', source: feedSource, feedUrl: url, articles });
+    return res.json({ type: 'feed', kind, source: feedSource, feedUrl, articles });
   } catch (_rssErr) {
     // Fall through to single-article attempt
   }
@@ -821,6 +893,19 @@ NEVER USE (these are the dead giveaways of AI prose — eliminate them entirely)
 - Rhetorical-question padding: "But why does this matter?", "So what's next?", "What does this mean for X?"
 - Em-dashes as a verbal tic — sprinkle them lightly, not in every sentence.
 
+BANNED SENTENCE SHAPES (rewrite to state the claim directly — these constructions mark prose as generated regardless of vocabulary):
+- Antithesis scaffolding: "It's not just X — it's Y", "This isn't about X; it's about Y", "not only X but also Y", "X isn't just a Y. It's a Z." State what it IS. Skip the wind-up about what it isn't.
+- The fake-comprehensive sweep: "from startups to Fortune 500s", "from Wall Street to Main Street", "whether you're a founder or a Fortune 500 exec".
+- Rule-of-three cadence as filler: "faster, cheaper, and more reliable" sentence after sentence. Use a list of three only when three real, distinct items exist in the source.
+- "The question is..." / "The question now:" as a pivot. If there's a question worth raising, the next sentence should answer it with a fact.
+
+SOUND WRITTEN, NOT GENERATED:
+- Use natural contractions (it's, don't, that's, won't) the way newsletter writers actually talk. Fully uncontracted prose reads as machine output.
+- An occasional deliberate fragment is fine. Like this. Real columnists use them for emphasis — sparingly, once per piece at most.
+- Vary paragraph length. A one-sentence paragraph after two long ones lands harder than uniform blocks.
+- Don't open consecutive sentences or paragraphs with the same word (especially "The" or the company's name).
+- Round numbers the way a person would when precision doesn't matter ("about 40%", "just under $2 billion") — but keep exact figures exact when the number IS the story.
+
 WHAT TO DO INSTEAD:
 - Trust the reader. Don't explain what they already know.
 - If you have a take, state it as a claim, not as "some argue". Own it.
@@ -863,6 +948,11 @@ const CLICHE_CLOSERS = [
   /\s*Buckle up[.!]?\s*$/im,
   /\s*Stay tuned[.!]?\s*$/im,
   /\s*One thing is (?:clear|certain)[:.][^\n]*$/im,
+  /\s*(?:It|That|Whether [^\n]{1,60}) remains to be seen[^\n]*$/im,
+  /\s*The (?:coming|next) (?:weeks|months|days|quarters) will (?:be telling|be critical|be crucial|tell|reveal)[^\n]*$/im,
+  /\s*The road ahead[^\n]*$/im,
+  /\s*This is (?:definitely )?one to watch[.!]?\s*$/im,
+  /\s*The world (?:is watching|will be watching)[.!]?\s*$/im,
 ];
 
 // Strip these phrases wherever they appear (with smart spacing cleanup)
@@ -877,6 +967,14 @@ const INLINE_REMOVALS = [
   /\bmoving forward,\s*/gi,
   /\bthat said,\s*/gi,
   /\bwhen all is said and done,\s*/gi,
+  /\b(?:it'?s|it is) (?:important|essential|crucial|worth) to (?:note|remember|understand|mention) that\s*/gi,
+  /\bit should be noted that\s*/gi,
+  /\bto be clear,\s*/gi,
+  /\bto be sure,\s*/gi,
+  /\b(?:simply put|put simply),\s*/gi,
+  /\bin a world where [^,.\n]{1,80},\s*/gi,
+  // Sentence-start-only (capital + lookbehind — mid-sentence uses are legitimate prose)
+  /(?<=^|\n|[.!?]\s)(?:Essentially|Ultimately|Basically|Fundamentally),\s*/g,
 ];
 
 // AI-vocabulary swaps to neutral journalism English
@@ -913,6 +1011,28 @@ const PHRASE_SWAPS = [
   [/\bmay possibly\b/gi, 'may'],
   [/\bcompletely eliminate\b/gi, 'eliminate'],
   [/\babsolutely essential\b/gi, 'essential'],
+  [/\butilize\b/gi, 'use'],
+  [/\butilizes\b/gi, 'uses'],
+  [/\butilized\b/gi, 'used'],
+  [/\butilizing\b/gi, 'using'],
+  [/\bin order to\b/gi, 'to'],
+  [/\ba myriad of\b/gi, 'many'],
+  [/\ba plethora of\b/gi, 'plenty of'],
+  [/\bamidst\b/gi, 'amid'],
+  [/\bwhilst\b/gi, 'while'],
+  [/\bgarnered\b/gi, 'drew'],
+  [/\bgarners\b/gi, 'draws'],
+  [/\bspearheaded\b/gi, 'led'],
+  [/\bspearheading\b/gi, 'leading'],
+  [/\bburgeoning\b/gi, 'growing'],
+  [/\bpoised to\b/gi, 'set to'],
+  [/\bpivotal moment\b/gi, 'turning point'],
+  [/\bembarked on\b/gi, 'began'],
+  [/\bembarks on\b/gi, 'begins'],
+  [/\brevolutionize\b/gi, 'upend'],
+  [/\brevolutionizes\b/gi, 'upends'],
+  [/\brevolutionizing\b/gi, 'upending'],
+  [/\bboasts (?=(?:a|an|the|more|over|nearly|roughly|about|some|\d))/gi, 'has '], // "boasts 4M users" → "has 4M users"
 ];
 
 function sanitizeAIVoice(text) {
@@ -1006,6 +1126,11 @@ WHAT TO IMPROVE:
 - Vary rhythm: break up runs of same-length sentences. Mix short declaratives with longer builds.
 - Replace limp verbs (is expected to, serves as, plays a role in) with direct ones.
 - Kill any remaining AI tells: telegraphed subheads, stakes inflation ("reshape", "watershed"), hedge-and-puff ("could potentially"), throat-clearing ("Notably,"), fake-candid ("Make no mistake").
+- Dismantle antithesis scaffolding: "It's not just X — it's Y", "not only X but also Y", "This isn't about X; it's about Y". Rewrite to state the actual claim directly; drop the wind-up about what it isn't.
+- De-tick em-dashes: if they appear sentence after sentence, restructure most into commas, periods, or plain clauses. Two per piece is plenty.
+- Break rule-of-three lists used as cadence filler ("faster, cheaper, and more reliable") unless each item carries distinct information from the source.
+- Contract where a person would: "it is" → "it's", "do not" → "don't", "cannot" → "can't" — except in quotes, which stay verbatim.
+- Vary paragraph length if the draft is uniform blocks — a short paragraph after long ones is fine.
 - Tighten transitions so the piece reads as one continuous report, not assembled blocks.`;
 
 async function editorPass(draft, { brandVoice = '' } = {}) {
@@ -1034,6 +1159,34 @@ async function editorPass(draft, { brandVoice = '' } = {}) {
   }
 }
 
+// ── Humanity rescue ───────────────────────────────────────────────────────────
+// Some AI tells are sentence SHAPES — antithesis scaffolding, em-dash tics,
+// rule-of-three cadence — that a regex can't fix without rewriting the sentence.
+// This detector counts them; when a draft comes back with enough of them, the
+// editor pass (normally lead-story-only) runs as a rescue rewrite. Costs a
+// second model call only on drafts that actually need it.
+const RESCUE_ACTIONS = new Set(['rewrite', 'summarize', 'cta']);
+const RESCUE_THRESHOLD = 2;
+
+function aiTellCount(text) {
+  if (!text || typeof text !== 'string') return 0;
+  let n = 0;
+  n += (text.match(/\bnot only\b[\s\S]{0,90}?\bbut(?: also)?\b/gi) || []).length;
+  n += (text.match(/\b(?:is|are|was|were|does|do|did)n'?t (?:just|only|merely|simply)\b/gi) || []).length;
+  n += (text.match(/\bnot (?:just|only|merely|simply) (?:a|an|about)\b/gi) || []).length;
+  n += (text.match(/\bThe question (?:is|now|remains)\b/g) || []).length;
+  n += (text.match(/\bwhether you'?re\b/gi) || []).length;
+  n += (text.match(/\bfrom [A-Z][\w .&-]{1,30} to [A-Z][\w .&-]{1,30}\b/g) || []).length; // fake-comprehensive sweep
+  // Em-dash as a tic: several of them and more than one per two sentences
+  const sentences = (text.match(/[.!?](?:\s|$)/g) || []).length || 1;
+  const dashes = (text.match(/—/g) || []).length;
+  if (dashes >= 3 && dashes > sentences / 2) n += 2;
+  // Rule-of-three cadence: multiple "x, y, and z" triads in one piece
+  const triads = (text.match(/\b[\w'’-]+, [\w'’-]+, and [\w'’-]+\b/g) || []).length;
+  if (triads >= 2) n += 1;
+  return n;
+}
+
 // Per-action sampling temperature. Lower = more grounded/consistent (good for
 // factual synthesis); higher = more varied (good for creative headline work).
 const TEMPERATURE = {
@@ -1049,6 +1202,7 @@ const TEMPERATURE = {
   'hooks': 0.95,
   'brand-voice': 0.4,
   'briefing-prompt': 0.4,
+  'score-stories': 0.2, // deterministic ranking — same feed should score the same
 };
 
 // Mock responses for when no API key is configured
@@ -1086,6 +1240,14 @@ function extractKeyFact(text = '') {
 }
 
 function mockResponse(action, content, contents = []) {
+  if (action === 'score-stories') {
+    const items = contents.length ? contents : [content];
+    return JSON.stringify(items.map((a, i) => ({
+      id: a.id,
+      score: Math.max(25, 92 - i * 6),
+      reason: 'Mock score — connect an API key for real audience-fit ranking',
+    })));
+  }
   if (action === 'top-stories' || action === 'quick-hits') {
     const items = contents.length ? contents : [content];
     const emojis = ['🔴','🤖','📅','🏠','💼','📈','🌍','⚖️'];
@@ -1395,6 +1557,28 @@ Write a voice profile of 200-300 words structured as direct instructions to an A
 Quote actual short phrases or patterns from the samples to make the profile concrete. Write it as a style guide, not a critique.`,
       user: `Analyze these newsletter issues and write the AI voice profile:\n\n${content.text || content.summary}`,
     },
+    'score-stories': (() => {
+      const items = contents.length ? contents : [content];
+      const list = items.map((a) =>
+        `ID: ${a.id}\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nSummary: ${(a.summary || a.text || '').slice(0, 400)}`
+      ).join('\n\n');
+      return {
+        system: `You are a newsletter editor triaging candidate stories for one specific audience. Score each story 0-100 for how much THIS audience needs it in the next issue.
+
+Scoring guide:
+- 85-100: must-cover — squarely in the audience's stated interests, fresh, they'd feel the newsletter missed something without it
+- 65-84: strong fit — clearly relevant, worth a slot if space allows
+- 40-64: marginal — tangentially related, or relevant but stale/oversaturated
+- 0-39: skip — off-topic for this audience regardless of general newsworthiness
+
+Judge on: direct relevance to the audience's interests and work, actionability for them, freshness, and whether they'd already have seen it everywhere. Use the full range — do not cluster everything in the 60s.
+
+Return ONLY a JSON array, no markdown fences, no commentary. One object per story, same order as given:
+[{"id":"...","score":87,"reason":"short phrase"}]
+"reason" is under 12 words and states why it does or doesn't fit this audience.`,
+        user: `Audience profile:\n${audienceAvatar || 'A general professional audience interested in staying ahead of the news.'}\n${customPrompt ? `\nEditor's notes: ${customPrompt}\n` : ''}\nScore these ${items.length} stories:\n\n${list}`,
+      };
+    })(),
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
       const articleList = items.map((a, i) =>
@@ -1428,7 +1612,7 @@ Examples:
   // Allow more tokens for long-form pieces and multi-article lists
   const maxTokens = action === 'brand-voice' ? 3000
     : ['lead-story', 'rewrite'].includes(action) ? 2000
-    : ['quick-hits', 'top-stories'].includes(action) ? 1600
+    : ['quick-hits', 'top-stories', 'score-stories'].includes(action) ? 1600
     : 1200;
 
   const params = {
@@ -1458,7 +1642,10 @@ Examples:
       // streamed draft: editor pass (lead story only) then the sanitizer.
       // User sees live streaming, then it tightens at the end.
       let finalText = assembled;
-      if (EDITOR_ACTIONS.has(action)) finalText = await editorPass(finalText, { brandVoice });
+      if (EDITOR_ACTIONS.has(action)
+        || (RESCUE_ACTIONS.has(action) && aiTellCount(finalText) >= RESCUE_THRESHOLD)) {
+        finalText = await editorPass(finalText, { brandVoice });
+      }
       if (SANITIZE_ACTIONS.has(action)) finalText = sanitizeAIVoice(finalText);
       if (finalText !== assembled) {
         res.write(`data: ${JSON.stringify({ clean: finalText })}\n\n`);
@@ -1476,7 +1663,10 @@ Examples:
   try {
     const message = await createWithFallback(params);
     let result = message.content[0].text;
-    if (EDITOR_ACTIONS.has(action)) result = await editorPass(result, { brandVoice });
+    if (EDITOR_ACTIONS.has(action)
+      || (RESCUE_ACTIONS.has(action) && aiTellCount(result) >= RESCUE_THRESHOLD)) {
+      result = await editorPass(result, { brandVoice });
+    }
     if (SANITIZE_ACTIONS.has(action)) result = sanitizeAIVoice(result);
     return res.json({ result });
   } catch (e) {
@@ -1634,3 +1824,7 @@ app.listen(PORT, () => {
   console.log(`  AI: ${process.env.ANTHROPIC_API_KEY ? '✓ Anthropic connected' : '○ Mock mode (no ANTHROPIC_API_KEY)'}`);
   console.log(`  Auth: ${process.env.SUPABASE_URL ? '✓ Supabase connected' : '○ Not configured (no SUPABASE_URL)'}\n`);
 });
+
+// Exported for tests only (importing this module still starts the server —
+// set PORT=0 in a test to bind an ephemeral port).
+export { sanitizeAIVoice, aiTellCount };

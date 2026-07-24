@@ -55,6 +55,9 @@ const state = {
   versions: [],
   draggedArticleId: null,
   draggedStory: null,
+  storyScores: {},         // articleId -> { score, reason } from audience-fit ranking
+  scoringStories: false,   // transient: a ranking request is in flight
+  sidebarSort: 'newest',   // 'newest' | 'fit' — how the source sidebar orders articles
   hasAI: false,
   hasStripe: false,
   hasBeehiiv: false,
@@ -432,6 +435,7 @@ function handleClick(e) {
     case 'show-preview':    showPreview(); break;
     case 'close-preview':   closePreview(); break;
     case 'copy-html':       copyHTML(); break;
+    case 'copy-rich':       copyRichText(); break;
     case 'export-json':     exportJSON(); break;
     case 'copy-beehiiv-section': copyBeehiivSection(d.section); break;
     case 'beehiiv-paste-modal': showBeehiivPasteModal(); break;
@@ -1726,8 +1730,8 @@ function renderSourcesPage() {
       <div>
         <div class="page-title">Sources</div>
         <div class="page-sub">${canUsePubs()
-          ? `RSS feeds for <strong style="color:var(--text-2)">📰 ${escHtml(currentPublicationName())}</strong> — each publication keeps its own.`
-          : 'RSS feeds and URLs you pull articles from.'}</div>
+          ? `Feeds for <strong style="color:var(--text-2)">📰 ${escHtml(currentPublicationName())}</strong> — each publication keeps its own.`
+          : 'RSS feeds, YouTube channels, subreddits, and URLs you pull stories from.'}</div>
       </div>
     </div>
     <div class="page-body">
@@ -1742,7 +1746,7 @@ function renderSourcesPage() {
       </div>` : ''}
       <div class="card" style="margin-bottom:20px;padding:16px 20px">
         <form id="source-form" style="display:flex;gap:10px;align-items:center">
-          <input id="source-url-input" class="input" type="url" placeholder="Paste RSS feed URL or article URL…" style="flex:1">
+          <input id="source-url-input" class="input" type="url" placeholder="Paste an RSS feed, YouTube channel, subreddit, or article URL…" style="flex:1">
           <button id="source-add-btn" type="submit" class="btn btn-primary">Add Source</button>
         </form>
         <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
@@ -1752,7 +1756,12 @@ function renderSourcesPage() {
             ['Axios', 'https://api.axios.com/feed/'],
             ['BBC News', 'https://feeds.bbci.co.uk/news/rss.xml'],
             ['NPR', 'https://feeds.npr.org/1001/rss.xml'],
+            ['👽 r/technology', 'https://www.reddit.com/r/technology/'],
+            ['📺 MKBHD', 'https://www.youtube.com/@mkbhd'],
           ].map(([label, url]) => `<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="quickAddFeed('${url}')">${label}</button>`).join('')}
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-3)">
+          YouTube channels, subreddits, and Medium profiles are converted to feeds automatically — just paste the page URL.
         </div>
       </div>
 
@@ -1767,7 +1776,7 @@ function renderSourcesPage() {
         <div class="card" style="padding:16px 20px">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
             <div style="flex:1;min-width:0">
-              <div style="font-weight:600;font-size:14px;margin-bottom:2px">${escHtml(s.title)}</div>
+              <div style="font-weight:600;font-size:14px;margin-bottom:2px">${sourceIcon(s)} ${escHtml(s.title)}</div>
               <div style="font-size:12px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.feedUrl)}</div>
             </div>
             <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
@@ -2347,7 +2356,7 @@ function renderBuilder() {
     <div class="builder-topbar-right">
       <button class="btn btn-ghost btn-sm" data-action="show-preview">⊙ Preview</button>
       <button class="btn btn-outline btn-sm" data-action="export-json">↓ JSON</button>
-      <button class="btn btn-primary btn-sm" data-action="copy-html">⎘ Copy HTML</button>
+      <button class="btn btn-primary btn-sm" data-action="copy-rich" title="Paste into any newsletter editor — formatting and links preserved">⎘ Copy for Editor</button>
     </div>
   </header>
 
@@ -2359,7 +2368,7 @@ function renderBuilder() {
         <span class="text-xs text-dim">${state.sources.reduce((a,s)=>a+s.articles.length,0)} articles</span>
       </div>
       <form id="source-form" class="source-add-form">
-        <input class="input input-sm" name="url" id="source-url-input" placeholder="RSS feed or article URL" autocomplete="off">
+        <input class="input input-sm" name="url" id="source-url-input" placeholder="RSS, YouTube, subreddit, or article URL" autocomplete="off">
         <button type="submit" class="btn btn-sm btn-primary" id="source-add-btn">Add</button>
       </form>
       <div class="sources-list" id="sources-list">
@@ -2394,35 +2403,74 @@ function renderBuilder() {
 }
 
 // ── SOURCE SIDEBAR ────────────────────────────────────────────────────────────
+// Sources added before `kind` existed only have a feedUrl — derive it.
+function sourceKind(s) {
+  if (s.kind && s.kind !== 'rss') return s.kind;
+  const u = s.feedUrl || '';
+  if (/youtube\.com/.test(u)) return 'youtube';
+  if (/reddit\.com/.test(u)) return 'reddit';
+  return s.kind || 'rss';
+}
+
+function sourceIcon(s) {
+  return { youtube: '📺', reddit: '👽' }[sourceKind(s)] || '📰';
+}
+
+// Audience-fit score pill for an article, or '' if the sidebar hasn't been
+// ranked. Shared by the sidebar cards and the drag ghost.
+function fitBadgeHTML(articleId, extra = '') {
+  const fit = state.storyScores[articleId];
+  if (!fit) return '';
+  const color = fit.score >= 85 ? 'var(--green, #22c55e)'
+    : fit.score >= 65 ? 'var(--accent, #6366f1)'
+    : fit.score >= 40 ? 'var(--amber, #f59e0b)'
+    : 'var(--text-3)';
+  return `<span title="${escHtml(fit.reason || 'Audience fit score')}" style="flex-shrink:0;font-size:10px;font-weight:700;color:${color};border:1px solid currentColor;border-radius:99px;padding:0 6px;line-height:15px;${extra}">${fit.score}</span>`;
+}
+
 function renderSourceSidebar() {
   if (state.sources.length === 0) {
     return `<div class="source-empty">
       <div class="source-empty-icon">📡</div>
       <strong style="color:var(--text-2);font-size:13px">No sources yet</strong>
-      <p style="margin-top:6px">Paste an RSS feed URL or article link above to get started.</p>
+      <p style="margin-top:6px">Paste an RSS feed, YouTube channel, subreddit, or article link above.</p>
       <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px">
         <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://techcrunch.com/feed/')">Try TechCrunch</button>
+        <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://www.reddit.com/r/technology/')">Try r/technology</button>
         <button class="btn btn-sm btn-outline" onclick="quickAddFeed('https://feeds.bbci.co.uk/news/rss.xml')">Try BBC News</button>
       </div>
     </div>`;
   }
 
   const inSection = getAllSectionArticleIds();
+  const scored = Object.keys(state.storyScores).length > 0;
   const allArticles = state.sources
     .flatMap(feed => feed.articles.map(a => ({ ...a, feedId: feed.id })))
     .sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
+  if (scored && state.sidebarSort === 'fit') {
+    // Stable sort: unscored articles (added after the last ranking) sink to the
+    // bottom but keep their newest-first order among themselves.
+    allArticles.sort((a, b) =>
+      (state.storyScores[b.id]?.score ?? -1) - (state.storyScores[a.id]?.score ?? -1));
+  }
   const totalFetching = state.sources.filter(s => s.articles.length === 0).length;
 
   return `
 <div class="source-manager">
   ${state.sources.map(feed => `
   <div class="source-pill">
-    <span class="dot dot-green" style="flex-shrink:0"></span>
+    <span style="flex-shrink:0;font-size:11px">${sourceIcon(feed)}</span>
     <span class="source-pill-name">${escHtml(feed.title)}</span>
     <span class="source-pill-count">${feed.articles.length}</span>
     <button class="feed-remove-btn" data-action="remove-feed" data-feed-id="${feed.id}" title="Remove">×</button>
   </div>`).join('')}
   ${totalFetching > 0 ? `<div style="font-size:11px;color:var(--text-3);padding:4px 2px">Fetching ${totalFetching} source${totalFetching > 1 ? 's' : ''}…</div>` : ''}
+</div>
+<div style="display:flex;gap:6px;align-items:center;padding:8px 2px 0">
+  <button class="btn btn-sm btn-outline" style="flex:1;font-size:11px" onclick="scoreStories()" ${state.scoringStories ? 'disabled' : ''} title="Score every article against your audience avatar and sort the best fits to the top">
+    ${state.scoringStories ? '⏳ Ranking…' : scored ? '✨ Re-rank for audience' : '✨ Rank by audience fit'}
+  </button>
+  ${scored ? `<button class="btn btn-sm btn-ghost" style="font-size:11px;flex-shrink:0" onclick="setSidebarSort('${state.sidebarSort === 'fit' ? 'newest' : 'fit'}')" title="Toggle between best-fit and newest-first ordering">${state.sidebarSort === 'fit' ? 'Best fit ▾' : 'Newest ▾'}</button>` : ''}
 </div>
 <div class="source-divider"></div>
 ${allArticles.length === 0
@@ -2461,6 +2509,7 @@ function renderArticleCard(article, feedId, isInSection) {
     return `<option value="${id}">${escHtml(m.name)}</option>`;
   }).join('');
   const dblTarget = firstSectionOfType('lead') || 'leadStory';
+  const fitBadge = fitBadgeHTML(article.id);
   return `
 <div class="article-card ${isInSection ? 'in-section' : ''}"
   draggable="true"
@@ -2472,6 +2521,7 @@ function renderArticleCard(article, feedId, isInSection) {
   <div class="article-card-title">${escHtml(article.title)}</div>
   <div class="article-card-meta">
     <span class="article-card-source">${escHtml(article.source || '')}</span>
+    ${fitBadge}
     <span class="article-card-time">${article.timeAgo || ''}</span>
   </div>
   <div class="article-card-actions">
@@ -2498,13 +2548,17 @@ async function submitAddSource(form) {
     const res = await fetch(`/api/ingest?url=${encodeURIComponent(url)}&quick=1`);
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'Failed to fetch');
-    const existing = state.sources.find(s => s.feedUrl === url);
+    // The server may resolve the pasted URL (YouTube channel, subreddit, Medium
+    // profile) to its real RSS feed — store that so reloads re-ingest directly.
+    const resolvedUrl = data.feedUrl || url;
+    const existing = state.sources.find(s => s.feedUrl === url || s.feedUrl === resolvedUrl);
     if (existing) { toast('Feed already added', 'warn'); return; }
     const newSource = {
       id: uid(),
-      feedUrl: url,
+      feedUrl: resolvedUrl,
       title: data.source || new URL(url).hostname,
       type: data.type,
+      kind: data.kind || 'rss',
       articles: data.articles || [],
       collapsed: false,
     };
@@ -2554,11 +2608,92 @@ function refreshSourceSidebar() {
   if (el) el.innerHTML = renderSourceSidebar();
 }
 
+// ── SMART STORY SCORING ───────────────────────────────────────────────────────
+// Scores every sidebar article against the publication's audience avatar and
+// sorts the best fits to the top. One call scores the whole sidebar (counts as
+// a single generation). Scores live in memory only — article ids change on
+// every re-ingest, so there is nothing durable to persist.
+async function scoreStories() {
+  if (state.scoringStories) return;
+  const articles = state.sources.flatMap(f => f.articles);
+  if (articles.length === 0) { toast('Add some sources first', 'warn'); return; }
+  if (!(state.audienceAvatar || '').trim()) {
+    toast('Describe your audience in Settings → Audience Avatar first — ranking scores stories against it', 'warn');
+    navigate('settings');
+    return;
+  }
+  state.scoringStories = true;
+  refreshSourceSidebar();
+  try {
+    const newestFirst = [...articles].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
+    const batch = newestFirst.slice(0, 30).map(a => ({
+      id: a.id,
+      title: a.title,
+      source: a.source,
+      summary: (a.summary || a.text || '').slice(0, 400),
+    }));
+    const raw = await callAI('score-stories', {}, { contents: batch });
+    const json = (raw.match(/\[[\s\S]*\]/) || [null])[0];
+    if (!json) throw new Error('Unexpected response — try again');
+    const parsed = JSON.parse(json);
+    state.storyScores = {};
+    for (const r of parsed) {
+      if (!r || r.id == null) continue;
+      state.storyScores[r.id] = {
+        score: Math.max(0, Math.min(100, Math.round(Number(r.score) || 0))),
+        reason: String(r.reason || ''),
+      };
+    }
+    state.sidebarSort = 'fit';
+    const skipped = articles.length - batch.length;
+    toast(`Ranked ${parsed.length} stories for your audience${skipped > 0 ? ` (newest ${batch.length} of ${articles.length})` : ''}`, 'success');
+  } catch (e) {
+    if (!['subscription_required', 'generation_limit'].includes(e.message)) {
+      toast(`Ranking failed: ${e.message}`, 'error');
+    }
+  } finally {
+    state.scoringStories = false;
+    refreshSourceSidebar();
+  }
+}
+window.scoreStories = scoreStories;
+
+function setSidebarSort(mode) {
+  state.sidebarSort = mode === 'fit' ? 'fit' : 'newest';
+  refreshSourceSidebar();
+}
+window.setSidebarSort = setSidebarSort;
+
 // ── DRAG AND DROP ─────────────────────────────────────────────────────────────
+// Custom drag ghost: a compact pill with the fit score + title that follows the
+// cursor, so the score stays readable while dragging into a section (the
+// browser's default ghost is a washed-out snapshot of the whole card).
+function makeDragGhost(articleId) {
+  const article = state.sources.flatMap(f => f.articles).find(a => a.id === articleId);
+  if (!article) return null;
+  const ghost = document.createElement('div');
+  ghost.id = 'drag-ghost';
+  ghost.style.cssText = 'position:absolute;top:-1000px;left:-1000px;z-index:9999;pointer-events:none;'
+    + 'display:flex;align-items:center;gap:8px;padding:8px 12px;max-width:280px;'
+    + 'background:var(--bg-3, #182035);border:1px solid var(--border-strong, rgba(130,160,255,0.26));'
+    + 'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);'
+    + 'font-size:12px;font-weight:600;color:var(--text-1, #f0f2ff)';
+  ghost.innerHTML = `${fitBadgeHTML(articleId, 'font-size:11px;line-height:17px')}
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(article.title || '')}</span>`;
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+function removeDragGhost() {
+  document.getElementById('drag-ghost')?.remove();
+}
+
 function dragStart(e, articleId) {
   state.draggedArticleId = articleId;
   e.dataTransfer.effectAllowed = 'copy';
   e.dataTransfer.setData('text/plain', articleId);
+  const ghost = makeDragGhost(articleId);
+  if (ghost) e.dataTransfer.setDragImage(ghost, 18, 18);
   setTimeout(() => { e.target.classList.add('dragging'); }, 0);
 }
 window.dragStart = dragStart;
@@ -2566,6 +2701,7 @@ window.dragStart = dragStart;
 function dragEnd(e) {
   e.target.classList.remove('dragging');
   state.draggedArticleId = null;
+  removeDragGhost();
 }
 window.dragEnd = dragEnd;
 
@@ -4768,7 +4904,8 @@ function renderDesignPanel() {
 <div class="panel-section">
   <div class="panel-section-title">Export</div>
   <div style="display:flex;flex-direction:column;gap:5px">
-    <button class="ai-action-btn" data-action="copy-html"><span class="ai-action-icon">⎘</span> Copy HTML</button>
+    <button class="ai-action-btn" data-action="copy-rich" title="Paste into any newsletter editor — formatting and links preserved"><span class="ai-action-icon">⎘</span> Copy for Editor</button>
+    <button class="ai-action-btn" data-action="copy-html" title="Raw email HTML for platforms with an HTML import"><span class="ai-action-icon">&lt;&gt;</span> Copy HTML</button>
     <button class="ai-action-btn" data-action="export-json"><span class="ai-action-icon">↓</span> Export JSON</button>
   </div>
 </div>
@@ -4881,6 +5018,7 @@ function showPreview() {
     <div class="preview-modal-toolbar">
       <div class="preview-modal-title">${escHtml(state.newsletter.title)}</div>
       <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" data-action="copy-rich" title="Paste into any newsletter editor — formatting and links preserved">⎘ Copy for Editor</button>
         <button class="btn btn-outline btn-sm" data-action="copy-html">⎘ Copy HTML</button>
         <button class="btn btn-ghost btn-sm" data-action="close-preview">✕ Close</button>
       </div>
@@ -5022,6 +5160,84 @@ function buildExportHTML() {
 function copyHTML() {
   navigator.clipboard.writeText(buildExportHTML())
     .then(() => toast('Email-safe HTML copied to clipboard', 'success'))
+    .catch(() => toast('Copy failed', 'error'));
+}
+
+// ── RICH-TEXT COPY (paste into any newsletter editor) ─────────────────────────
+// Writes both text/html and text/plain to the clipboard, so WYSIWYG editors
+// (Beehiiv, Mailchimp, Kit, Substack) paste formatted content with live
+// hyperlinks — never raw markup.
+function linkifyUrls(escapedText) {
+  return escapedText.replace(/https?:\/\/[^\s<]+/g, url => `<a href="${url}">${url}</a>`);
+}
+
+function markdownToPlainText(text) {
+  return (text || '')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')                 // drop images
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')       // links → text (url)
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .trim();
+}
+
+function buildRichClipboardParts() {
+  const nl = state.newsletter;
+  const sectionOrder = nl.sectionOrder || ['topStories', 'leadStory', 'quickHits', 'cta'];
+  const sectionMeta  = nl.sectionMeta  || {};
+  const htmlParts = [];
+  const textParts = [];
+
+  const briefing = nl.topStoriesContent?.trim();
+  if (briefing) {
+    const name = sectionMeta.topStories?.name || "Today's Briefing";
+    htmlParts.push(`<h2>${escHtml(name)}</h2>` + briefing.split('\n').filter(l => l.trim())
+      .map(line => `<p>${linkifyUrls(escHtml(line))}</p>`).join(''));
+    textParts.push(name.toUpperCase() + '\n\n' + briefing);
+  }
+
+  for (const id of sectionOrder) {
+    if (id === 'topStories') continue;
+    const articles = (nl.sections?.[id] ?? []).filter(a => (a.content || a.summary || '').trim());
+    if (!articles.length) continue;
+    const name = sectionMeta[id]?.name || id;
+    htmlParts.push(`<h2>${escHtml(name)}</h2>` + articles
+      .map(a => `<p>${formatContent((a.content || a.summary).trim())}</p>`).join(''));
+    textParts.push(name.toUpperCase() + '\n\n' + articles
+      .map(a => markdownToPlainText(a.content || a.summary)).join('\n\n'));
+  }
+
+  return { html: htmlParts.join(''), text: textParts.join('\n\n\n') };
+}
+
+function writeRichClipboard(html, text) {
+  if (navigator.clipboard?.write && window.ClipboardItem) {
+    return navigator.clipboard.write([new ClipboardItem({
+      'text/html':  new Blob([html], { type: 'text/html' }),
+      'text/plain': new Blob([text], { type: 'text/plain' }),
+    })]);
+  }
+  // Fallback: select a hidden node and use the legacy copy command
+  return new Promise((resolve, reject) => {
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    holder.innerHTML = html;
+    document.body.appendChild(holder);
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(range);
+    const ok = document.execCommand('copy');
+    sel.removeAllRanges();
+    holder.remove();
+    ok ? resolve() : reject();
+  });
+}
+
+function copyRichText() {
+  const { html, text } = buildRichClipboardParts();
+  if (!html) { toast('Add some content to your newsletter first', 'warn'); return; }
+  writeRichClipboard(html, text)
+    .then(() => toast('Copied — paste into your newsletter editor, links included', 'success'))
     .catch(() => toast('Copy failed', 'error'));
 }
 
@@ -6127,7 +6343,7 @@ function showBeehiivPasteModal() {
       <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border-md);display:flex;align-items:center;justify-content:space-between">
         <div>
           <div class="modal-title" style="margin:0">Copy for Beehiiv</div>
-          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Copy each section and paste directly into Beehiiv's editor</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Copy each section and paste directly into Beehiiv's editor — formatting and links are preserved</div>
         </div>
         <button class="btn btn-ghost btn-sm" data-action="close-modal" style="font-size:20px;padding:2px 8px">×</button>
       </div>
@@ -6152,7 +6368,17 @@ function showBeehiivPasteModal() {
 function copyBeehiivSection(sectionId) {
   const el = document.getElementById(`beehiiv-text-${sectionId}`);
   if (!el) return;
-  navigator.clipboard.writeText(el.value)
+  const nl = state.newsletter;
+  let html;
+  if (sectionId === 'topStories') {
+    html = (nl.topStoriesContent || '').split('\n').filter(l => l.trim())
+      .map(line => `<p>${linkifyUrls(escHtml(line))}</p>`).join('');
+  } else {
+    html = (nl.sections?.[sectionId] ?? [])
+      .filter(a => (a.content || a.summary || '').trim())
+      .map(a => `<p>${formatContent((a.content || a.summary).trim())}</p>`).join('');
+  }
+  writeRichClipboard(html, markdownToPlainText(el.value) || el.value)
     .then(() => {
       toast('Copied — paste into Beehiiv', 'success');
       // Flash the button
