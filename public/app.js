@@ -2963,8 +2963,8 @@ function renderEditorSections() {
 // Copies the section as rich text (formatting + live links); warns if empty.
 function sectionCopyBarHtml(sectionId) {
   return `
-  <div class="section-copy-bar" style="display:flex;justify-content:flex-end;margin-bottom:4px">
-    <button class="btn btn-outline btn-sm" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included" style="font-size:11px;padding:3px 10px">⎘ Copy section</button>
+  <div class="section-copy-bar">
+    <button class="btn btn-ghost" data-action="copy-section" data-section-id="${sectionId}" title="Copy this section — paste into your newsletter editor, links included">⎘ Copy section</button>
   </div>`;
 }
 
@@ -2992,8 +2992,8 @@ function renderTopStoriesSection(sectionId = 'topStories', sectionName = "Today'
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, 'briefing')}
       <button class="btn btn-sm btn-primary" data-action="generate-top-stories" ${articles.length === 0 ? 'disabled title="Drop articles first"' : ''}>▶ Generate</button>
-      <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
-      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
+      <button class="btn btn-sm btn-ghost btn-icon-sm" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh">⟲</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost btn-icon-sm" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red)">🗑</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -3199,8 +3199,8 @@ function renderLeadSection(sectionId, label) {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, cfg.type)}
       <button class="btn btn-sm btn-primary" data-action="generate-lead-story" data-section="${sectionId}">✦ Generate${n > 1 ? ` (${n})` : ''}</button>
-      <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
-      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
+      <button class="btn btn-sm btn-ghost btn-icon-sm" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh">⟲</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost btn-icon-sm" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red)">🗑</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -3308,8 +3308,8 @@ function renderSection(sectionId, label, type = 'hits') {
       <button class="btn btn-sm btn-ghost section-prompt-toggle ${promptOpen ? 'active' : ''} ${hasCustomPrompt && !promptOpen ? 'has-value' : ''}" data-action="toggle-section-prompt" data-section-id="${sectionId}" title="${promptOpen ? 'Hide issue angle' : 'Add an angle for this issue'}">✏</button>
       ${sectionTypePickerHtml(sectionId, type)}
       <button class="btn btn-sm btn-primary" data-action="apply-prompt" data-section="${sectionId}" title="Write each article in this section with AI">✦ Generate</button>
-      <button class="btn btn-sm btn-ghost" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh" style="padding:2px 6px">⟲</button>
-      ${canRemove ? `<button class="btn btn-sm btn-ghost" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red);padding:2px 6px">🗑</button>` : ''}
+      <button class="btn btn-sm btn-ghost btn-icon-sm" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear articles & content, start fresh">⟲</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost btn-icon-sm" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red)">🗑</button>` : ''}
     </div>
   </div>
   <div class="section-drop-zone" data-section="${sectionId}">
@@ -4955,21 +4955,19 @@ ${s.results.length ? `
   <div class="panel-section-title">${s.results.length} options — click ⎘ to copy</div>
   <div style="display:flex;flex-direction:column;gap:8px">
     ${s.results.map((line, i) => `
-    <div style="border:1px solid var(--border-md);border-radius:var(--r-md);padding:8px 10px">
-      <div style="display:flex;align-items:flex-start;gap:6px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12.5px;font-weight:700;color:var(--text-1);line-height:1.4">${escHtml(line)}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:3px">
-            <span style="color:${line.length > 52 ? 'var(--red)' : 'var(--text-3)'}">${line.length} chars${line.length > 52 ? ' — may truncate' : ''}</span>
-          </div>
-          <div style="margin-top:5px;padding:6px 8px;background:var(--bg-3);border-radius:6px;font-size:11px;line-height:1.4;overflow:hidden">
-            <span style="font-weight:700;color:var(--text-2)">${escHtml(state.newsletter.title || 'Your Newsletter')}</span><br>
-            <span style="font-weight:600;color:var(--text-1)">${escHtml(line)}</span>
-            <span style="color:var(--text-3)"> — ${escHtml(s.input.replace(/\s+/g, ' ').slice(0, 80))}…</span>
-          </div>
+    <div class="subject-card">
+      <div class="subject-card-main">
+        <div class="subject-card-line">${escHtml(line)}</div>
+        <div class="subject-card-meta">
+          <span class="${line.length > 52 ? 'over' : ''}">${line.length} chars${line.length > 52 ? ' — may truncate' : ''}</span>
         </div>
-        <button class="btn btn-ghost btn-sm" data-action="subjects-copy" data-idx="${i}" title="Copy this subject line" style="padding:2px 7px;flex-shrink:0">⎘</button>
+        <div class="inbox-preview">
+          <span style="font-weight:700;color:var(--text-2)">${escHtml(state.newsletter.title || 'Your Newsletter')}</span><br>
+          <span style="font-weight:600;color:var(--text-1)">${escHtml(line)}</span>
+          <span style="color:var(--text-3)"> — ${escHtml(s.input.replace(/\s+/g, ' ').slice(0, 80))}…</span>
+        </div>
       </div>
+      <button class="btn btn-ghost btn-sm btn-icon-sm" data-action="subjects-copy" data-idx="${i}" title="Copy this subject line" style="flex-shrink:0">⎘</button>
     </div>`).join('')}
   </div>
 </div>` : ''}

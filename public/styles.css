@@ -165,6 +165,15 @@ ul, ol { list-style: none; }
 .btn-icon:hover { background: var(--bg-4); color: var(--text-1); }
 .btn-danger { background: var(--red-soft); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
 .btn-danger:hover { background: var(--red); color: #fff; }
+/* Small square icon-only buttons (section header controls) — one size, one padding */
+.btn-icon-sm { padding: 3px 7px; font-size: 12px; border-radius: var(--r-sm); line-height: 1.4; }
+
+/* Keyboard focus + disabled, consistent across every clickable */
+.btn:focus-visible, .panel-tab:focus-visible, .tone-chip:focus-visible,
+.ai-action-btn:focus-visible, .story-action-btn:focus-visible, .settings-tab:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.btn:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
 
 /* ── Inputs ─────────────────────────────────────────────────────────────────── */
 .input {
@@ -177,6 +186,12 @@ ul, ol { list-style: none; }
 .input::placeholder { color: var(--text-3); }
 .input-sm { padding: 5px 9px; font-size: 12px; }
 textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
+/* Native selects: match .input styling instead of OS chrome */
+select.input {
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888fa8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center; padding-right: 28px;
+}
 
 /* ── Badge / Chip ───────────────────────────────────────────────────────────── */
 .badge {
@@ -222,7 +237,8 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .toast {
   display: flex; align-items: center; gap: 10px;
   background: var(--bg-3); border: 1px solid var(--border-md); border-radius: var(--r-md);
-  padding: 11px 16px; font-size: 13px; box-shadow: var(--shadow-lg);
+  border-left-width: 3px;
+  padding: 11px 16px; font-size: 13px; line-height: 1.45; box-shadow: var(--shadow-lg);
   pointer-events: all; animation: toast-in 0.22s ease;
   max-width: 340px;
 }
@@ -984,8 +1000,10 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 /* Editor main */
 .editor-main {
   flex: 1; overflow-y: auto; background: var(--bg-1);
-  padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; min-width: 0;
 }
+/* The draft is the star: cap line length on wide screens, keep it centered */
+.editor-main > * { width: 100%; max-width: 920px; margin-left: auto; margin-right: auto; }
 .newsletter-meta { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .meta-input {
   background: transparent; border: none; outline: none; width: 100%; color: var(--text-1);
@@ -1053,6 +1071,30 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
 .drop-placeholder-steps { margin-top: 14px; display: flex; flex-direction: column; gap: 5px; text-align: left; max-width: 240px; margin-left: auto; margin-right: auto; }
 .drop-step { font-size: 11px; color: var(--text-3); display: flex; align-items: flex-start; gap: 7px; line-height: 1.5; }
 .drop-step-num { width: 16px; height: 16px; border-radius: 50%; background: var(--bg-4); color: var(--text-2); font-size: 9px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+
+/* Per-section copy bar: a quiet cap strip on each section card */
+.section-copy-bar {
+  display: flex; justify-content: flex-end; align-items: center;
+  padding: 5px 10px; background: var(--bg-3); border-bottom: 1px solid var(--border);
+}
+.section-copy-bar .btn { font-size: 11px; padding: 3px 10px; color: var(--text-2); }
+.section-copy-bar .btn:hover { color: var(--text-1); }
+
+/* Subject Line Generator result cards */
+.subject-card {
+  border: 1px solid var(--border-md); border-radius: var(--r-md);
+  padding: 9px 11px; background: var(--bg-3);
+  display: flex; align-items: flex-start; gap: 6px;
+}
+.subject-card-main { flex: 1; min-width: 0; }
+.subject-card-line { font-size: 13px; font-weight: 600; line-height: 1.45; color: var(--text-1); }
+.subject-card-meta { font-size: 11px; color: var(--text-3); margin-top: 3px; }
+.subject-card-meta .over { color: var(--red); font-weight: 600; }
+.inbox-preview {
+  margin-top: 6px; padding: 7px 9px; background: var(--bg-1);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  font-size: 11px; line-height: 1.5; overflow: hidden;
+}
 
 /* Quick Hits section grid */
 .quick-hits-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
@@ -1129,7 +1171,7 @@ textarea.input { resize: vertical; min-height: 80px; line-height: 1.5; }
   text-align: center;
 }
 .panel-tab:hover { color: var(--text-1); }
-.panel-tab.active { color: var(--text-1); border-bottom-color: var(--accent); }
+.panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: linear-gradient(180deg, transparent 60%, var(--accent-soft) 100%); }
 .panel-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; }
 
 /* Panel sections */
