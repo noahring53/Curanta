@@ -407,6 +407,7 @@ function handleClick(e) {
     case 'remove-from-section': removeFromSection(d.articleId, d.section); break;
     case 'apply-prompt':      applyPrompt(d.section); break;
     case 'generate-lead-story': generateLeadStory(d.section); break;
+    case 'generate-intro': generateIntro(d.section); break;
     case 'remove-lead-source':  removeLeadSource(d.section, d.articleId); break;
     case 'generate-top-stories': generateTopStories(); break;
     case 'briefing-prompt-from-examples': showBriefingPromptModal(); break;
@@ -2243,6 +2244,7 @@ function renderSettingsPage() {
                 <option value="digest" ${s.mode === 'digest' ? 'selected' : ''}>Digest — one line per story</option>
                 <option value="synthesis" ${s.mode === 'synthesis' ? 'selected' : ''}>Synthesis — one piece from all sources</option>
                 <option value="perArticle" ${(!s.mode || s.mode === 'perArticle') ? 'selected' : ''}>Per story — one item per article</option>
+                <option value="intro" ${s.mode === 'intro' ? 'selected' : ''}>Intro — assembled from your own fragments, no articles</option>
               </select>
               <select class="input input-sm" onchange="setSectionTemplateField('${s.id}','format',this.value)" title="Output format" style="width:auto;font-size:11px;padding:3px 6px">
                 <option value="prose" ${(!s.format || s.format === 'prose') ? 'selected' : ''}>Prose</option>
@@ -2951,6 +2953,7 @@ function renderEditorSections() {
   return state.newsletter.sectionOrder.map(id => {
     const meta = state.newsletter.sectionMeta[id] || { name: id, type: 'generic' };
     if (meta.type === 'briefing') return renderTopStoriesSection(id, meta.name);
+    if (meta.type === 'intro') return renderIntroSection(id, meta.name);
     return renderSection(id, meta.name, meta.type);
   }).join('') + `<div style="padding:12px 0;text-align:center;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
     <button class="btn btn-ghost btn-sm" data-action="show-add-section">+ Add section</button>
@@ -3057,6 +3060,10 @@ function hostnameOf(url) {
 // Which section types stage multiple articles then generate one combined output.
 function isSynthType(type) { return type === 'lead' || type === 'hits'; }
 
+// Intro sections never stage articles — they assemble the writer's own
+// fragments (typed into the same per-issue prompt box) into a short note.
+function isIntroType(type) { return type === 'intro'; }
+
 function synthConfig(sectionId) {
   const type = state.newsletter.sectionMeta[sectionId]?.type || 'generic';
   if (type === 'hits') {
@@ -3156,6 +3163,26 @@ async function generateLeadStory(sectionId) {
       entry.content = await callAI(action, sources[0], sternOpts);
     }
     toast(`${noun.charAt(0).toUpperCase() + noun.slice(1)} generated from ${sources.length} article${sources.length === 1 ? '' : 's'}`, 'success');
+  } catch (e) {
+    if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
+  }
+  entry.loading = false;
+  refreshSectionContent(sectionId);
+  scheduleSave();
+}
+
+// Intro generation never stages articles — its only input is the fragments the
+// writer typed into the section's prompt box. Unlike generateLeadStory, this
+// does NOT retry on a refusal-shaped response: Mode B (clarifying questions)
+// and Mode C (the "no intro supplied" sentinel) are both CORRECT outputs that
+// happen to look like a refusal, and must not be overridden into fabricating one.
+async function generateIntro(sectionId) {
+  const entry = getLeadEntry(sectionId, true);
+  const fragments = (state.newsletter.prompts[sectionId] || '').trim();
+  entry.loading = true; entry.editing = false;
+  refreshSectionContent(sectionId);
+  try {
+    entry.content = await callAI('section', {}, { prompt: fragments, section: sectionConfigFor(sectionId) });
   } catch (e) {
     if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
   }
@@ -3285,6 +3312,91 @@ function renderLeadBody(sectionId) {
   </div>`;
 }
 
+// ── INTRO SECTION ──────────────────────────────────────────────────────────────
+// Never stages articles. The writer's fragments live in the same per-issue
+// prompt box every other section uses (state.newsletter.prompts[sectionId]);
+// the server assembles/questions/sentinels based on what's in there. Content
+// is stored in the same _lead entry shape as lead/hits so the story-block UI
+// (loading, editing, regenerate) can be reused as-is.
+function renderIntroSection(sectionId, label) {
+  const canRemove = state.newsletter.sectionOrder.length > 1;
+  const fragments = state.newsletter.prompts[sectionId] || '';
+  return `
+<div class="editor-section" id="section-${sectionId}" draggable="true"
+  ondragstart="sectionDragStart(event,'${sectionId}')"
+  ondragend="sectionDragEnd(event)"
+  ondragover="sectionDragOver(event,'${sectionId}')"
+  ondrop="sectionDrop(event,'${sectionId}')">
+  ${sectionCopyBarHtml(sectionId)}
+  <div class="section-header">
+    <span class="section-drag-handle" onmousedown="state._sectionDragReady='${sectionId}'" title="Drag to reorder">⠿</span>
+    <span class="section-label" data-action="rename-section" data-section-id="${sectionId}" title="Click to rename" style="cursor:pointer">${escHtml(label)}</span>
+    <div class="section-prompt-wrap">
+      ${sectionTypePickerHtml(sectionId, 'intro')}
+      <button class="btn btn-sm btn-primary" data-action="generate-intro" data-section="${sectionId}">✦ Generate</button>
+      <button class="btn btn-sm btn-ghost btn-icon-sm" data-action="reset-section-content" data-section-id="${sectionId}" title="Reset section — clear fragments & content, start fresh">⟲</button>
+      ${canRemove ? `<button class="btn btn-sm btn-ghost btn-icon-sm" data-action="remove-section" data-section-id="${sectionId}" title="Delete this section" style="color:var(--red)">🗑</button>` : ''}
+    </div>
+  </div>
+  <div style="padding:12px">
+    <div style="font-size:11px;font-weight:600;color:var(--text-3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Your fragments</div>
+    <textarea class="input section-prompt" data-section="${sectionId}" rows="5"
+      style="width:100%;box-sizing:border-box;resize:vertical;font-size:13px;line-height:1.6;margin-bottom:12px"
+      placeholder="WHAT: what happened&#10;STANDING: where you've stood on this before (if relevant)&#10;THINK: your actual take&#10;NOT SAYING: anything you don't want implied&#10;OFFER: what you're giving the reader today&#10;&#10;Leave blank to skip the intro entirely.">${escHtml(fragments)}</textarea>
+    <div class="section-content" id="section-content-${sectionId}">
+      ${renderIntroBody(sectionId)}
+    </div>
+  </div>
+</div>`;
+}
+
+function renderIntroBody(sectionId) {
+  const entry = getLeadEntry(sectionId);
+
+  if (entry?.loading) {
+    return `<div class="story-block loading" id="story-${entry.id}">
+      <div class="story-block-header"><span class="story-source">Intro</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> Generating…</span>
+      </div>
+      <div class="story-skeleton">
+        <div class="skeleton-line h-10 w-full"></div><div class="skeleton-line h-10 w-80"></div>
+        <div class="skeleton-line h-8 w-65"></div>
+      </div></div>`;
+  }
+
+  if (entry?.editing) {
+    const content = entry.content || '';
+    const rows = Math.max(4, (content.match(/\n/g) || []).length + 3);
+    return `<div class="story-block editing" id="story-${entry.id}">
+      <div class="story-block-header"><span class="story-source">Intro</span>
+        <span style="margin-left:auto;font-size:10px;color:var(--accent);font-weight:600">EDITING</span></div>
+      <textarea class="story-edit-textarea" data-article-id="${entry.id}" data-section="${sectionId}" rows="${rows}"
+        style="width:100%;box-sizing:border-box;padding:12px;font-size:13px;line-height:1.7;font-family:var(--font-mono);border:none;background:var(--bg-1);color:var(--text-1);resize:vertical;outline:none;border-bottom:1px solid var(--border)">${escHtml(content)}</textarea>
+      <div class="story-actions">
+        <button class="story-action-btn primary" data-action="save-story-edit" data-article-id="${entry.id}" data-section="${sectionId}">✓ Done</button>
+        <button class="story-action-btn" data-action="cancel-story-edit" data-article-id="${entry.id}" data-section="${sectionId}">✕ Cancel</button>
+      </div></div>`;
+  }
+
+  if (!entry?.content) {
+    return `<div style="padding:16px;text-align:center;border:1px dashed var(--border);border-radius:8px;color:var(--text-3);font-size:13px;line-height:1.6">
+      Ready — click <strong style="color:var(--text-2)">✦ Generate</strong> to assemble your fragments into an intro.
+    </div>`;
+  }
+
+  return `<div class="story-block" id="story-${entry.id}">
+    <div class="story-block-header">
+      <span class="story-source">Intro</span>
+      <button class="btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" data-action="edit-story" data-article-id="${entry.id}" data-section="${sectionId}">✎ Edit</button>
+    </div>
+    <div class="story-content">${formatContent(entry.content)}</div>
+    <div class="story-actions">
+      <button class="story-action-btn" data-action="generate-intro" data-section="${sectionId}">↺ Regenerate</button>
+      <button class="story-action-btn" data-action="edit-story" data-article-id="${entry.id}" data-section="${sectionId}">✎ Edit</button>
+    </div>
+  </div>`;
+}
+
 function renderSection(sectionId, label, type = 'hits') {
   if (isSynthType(type)) return renderLeadSection(sectionId, label);
   const articles = state.newsletter.sections[sectionId] || [];
@@ -3335,6 +3447,7 @@ function refreshTopStoriesSection() {
 function sectionTypePickerHtml(sectionId, currentType) {
   // Short labels so the dropdown stays compact in narrow editor columns.
   const opts = [
+    ['intro',    'Intro'],
     ['briefing', 'Briefing'],
     ['lead',     'Lead'],
     ['hits',     'Quick Hits'],
@@ -3362,6 +3475,7 @@ async function changeSectionType(sectionId, newType) {
   let hasContent = arr.length > 0;
   if (oldType === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
   if (isSynthType(oldType)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
+  if (isIntroType(oldType)) { const e = arr.find(a => a._lead); hasContent = !!(e && e.content); }
 
   if (hasContent) {
     const ok = await showConfirm({
@@ -3722,6 +3836,11 @@ function refreshSectionContent(sectionId) {
     container.className = 'section-content';
     container.innerHTML = renderLeadBody(sectionId);
     setupDropZones();
+    return;
+  }
+  if (isIntroType(sectionType)) {
+    container.className = 'section-content';
+    container.innerHTML = renderIntroBody(sectionId);
     return;
   }
   const articles = state.newsletter.sections[sectionId] || [];
@@ -4143,6 +4262,10 @@ const SECTION_MODE_PRESETS = {
     mode: 'perArticle', format: 'prose', length: 'short',
     instructions: "Write a call-to-action that converts: 2–3 sentences that read as a natural extension of the newsletter's voice, never a sales pitch bolted on at the end. Be specific about what the reader gets. One clear action. No bolded lede phrase and no Read-more link.",
   },
+  intro: {
+    mode: 'intro', format: 'prose', length: 'medium',
+    instructions: "Assemble the writer's own fragments into a short first-person note — never write it from scratch. If they gave you a topic with no take, ask for one instead of guessing. If they gave you nothing, say nothing.",
+  },
   generic: {
     mode: 'perArticle', format: 'prose', length: 'medium',
     instructions: "A tight newsletter blurb for each story that reads like a wire-service brief: open with a short bolded lede phrase (2–5 words, the news in a nutshell), then two or three sentences leading with the most concrete fact. End with a Read-more link to the article.",
@@ -4153,6 +4276,7 @@ const SECTION_MODE_PRESETS = {
 function typeForConfig(mode, format) {
   if (mode === 'digest') return 'briefing';
   if (mode === 'synthesis') return format === 'bullets' ? 'hits' : 'lead';
+  if (mode === 'intro') return 'intro';
   return 'generic';
 }
 
@@ -4250,6 +4374,7 @@ function getUserSections() {
 // Best-guess a section's content type from its name so users don't have to set it.
 function inferSectionType(name) {
   const n = (name || '').toLowerCase();
+  if (/^intro|editor.?s?\s*note|opening|from\s+me|welcome|personal note/.test(n)) return 'intro';
   if (/brief|today|top stor|digest|round-?up|headlines|the rundown/.test(n)) return 'briefing';
   if (/lead|feature|main story|deep ?dive|spotlight|cover/.test(n)) return 'lead';
   if (/quick|hits|bites|bullet|short|tl;?dr|rapid|in brief/.test(n)) return 'hits';
@@ -5652,6 +5777,7 @@ async function resetSectionContent(sectionId) {
   let hasContent = arr.length > 0;
   if (meta.type === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
   if (isSynthType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
+  if (isIntroType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && e.content); }
   if (!hasContent) { toast('Section is already empty', 'info'); return; }
 
   const ok = await showConfirm({
@@ -5680,6 +5806,7 @@ async function removeSection(sectionId) {
   let hasContent = arr.length > 0;
   if (meta.type === 'briefing') hasContent = hasContent || !!(state.newsletter.topStoriesContent || '').trim();
   if (isSynthType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && (e.content || e._sources?.length)); }
+  if (isIntroType(meta.type)) { const e = arr.find(a => a._lead); hasContent = !!(e && e.content); }
 
   const ok = await showConfirm({
     title: `Delete the "${name}" section?`,

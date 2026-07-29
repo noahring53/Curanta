@@ -989,6 +989,46 @@ The brand voice profile — if set — overrides stylistic defaults. Write as if
   };
 }
 
+// ── Intro section: assembles the writer's OWN words, never generates news ──────
+// This mode never invokes the "career newsletter journalist" persona used by
+// every other section (GROUNDING is deliberately excluded from its preamble).
+// It has exactly three modes, chosen by what the writer supplies — see the
+// system prompt below. The "no input" case is short-circuited before this
+// function is even called (see /api/ai) so it never costs a model call.
+function introPrompt(section, customPrompt, toneDesc, voiceNote) {
+  const s = section || {};
+  const brief = (s.instructions || '').trim();
+  const briefBlock = brief
+    ? `\n\nSECTION BRIEF — the editor's own definition of what this section does. This is authoritative: it supersedes every instruction above it in this prompt, including the mode logic's default phrasing (the hard rules below always apply):\n${brief}`
+    : '';
+
+  const system = `${toneDesc}${voiceNote}
+
+You are an editing assistant that ASSEMBLES a newsletter writer's own intro from fragments they hand you. You are not a journalist and this is not a news section — you never report, research, or add anything the writer did not supply.
+
+Choose exactly one mode based on the writer's input below:
+
+MODE A — The writer supplied real fragments (their own thoughts, notes, or labeled pieces like WHAT / STANDING / THINK / NOT SAYING / OFFER):
+Assemble them into 120–200 words of natural first-person prose in the writer's own voice. Add no fact, number, name, or opinion that is not already in the fragments. Preserve every hedge exactly as written — never sharpen "I think" into "I know," never turn "maybe" or "it seems" into a firm claim.
+
+MODE B — The writer flagged a topic but gave no actual take or opinion on it:
+Do not write an intro. Return exactly four short questions designed to draw the writer's real take out of them, one per line, and stop there. Output nothing else — no preamble, no intro draft.
+
+If you're unsure whether the input is a real fragment (Mode A) or just a bare topic mention (Mode B), treat it as Mode B.
+
+HARD RULES — apply no matter which mode you use:
+- Never write a headline or title.
+- Never write a markdown link ([text](url)) or a bare URL.
+- Never write a greeting ("Hey everyone," "Good morning,") or an "on this day in history" line.
+- Never write sourced, attributed, or outlet-referencing prose — that belongs in other sections, not here.${briefBlock}`;
+
+  const user = `Writer's input for the intro:\n\n${customPrompt.trim()}`;
+
+  return { system, user };
+}
+
+const NO_INTRO_SENTINEL = 'NO INTRO SUPPLIED. DO NOT SEND.';
+
 // Shared grounding rules injected into every content writer. This is the single
 // biggest quality + safety lever for a news tool: it stops the model inventing
 // facts and kills the tell-tale AI clichés that make copy read as generated.
@@ -1379,6 +1419,9 @@ function extractKeyFact(text = '') {
 }
 
 function mockResponse(action, content, contents = [], sectionCfg = null) {
+  if (action === 'section' && sectionCfg?.mode === 'intro') {
+    return 'Mock intro — connect an API key to assemble your fragments into a real intro.';
+  }
   if (action === 'section') {
     // Route config-driven sections to the legacy mock matching their shape
     const mode = sectionCfg?.mode || 'perArticle';
@@ -1471,6 +1514,12 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     count = 0,       // subject-lines: how many options to produce
   } = req.body;
 
+  // Intro, mode C: no writer input at all. Never call the model, never touch
+  // quota — this is a pure short-circuit so the sentinel is byte-exact and free.
+  if (action === 'section' && sectionCfg?.mode === 'intro' && !customPrompt.trim()) {
+    return res.json({ result: NO_INTRO_SENTINEL });
+  }
+
   if (!anthropic) {
     return res.json({ result: mockResponse(action, content, contents, sectionCfg), mock: true });
   }
@@ -1530,12 +1579,14 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     .join('\n');
 
   const prompts = {
-    'section': sectionPrompt(
-      sectionCfg,
-      contents.length ? contents : [content],
-      `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}`,
-      customPrompt
-    ),
+    'section': sectionCfg?.mode === 'intro'
+      ? introPrompt(sectionCfg, customPrompt, toneDesc, voiceNote)
+      : sectionPrompt(
+          sectionCfg,
+          contents.length ? contents : [content],
+          `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}`,
+          customPrompt
+        ),
     'lead-story': (() => {
       const items = contents.length ? contents : [content];
       const multi = items.length > 1;
@@ -1762,6 +1813,11 @@ Examples:
   const runEditorPass = (text) => EDITOR_ACTIONS.has(action) || sectionSynthProse
     || (RESCUE_ACTIONS.has(action) && aiTellCount(text) >= RESCUE_THRESHOLD);
 
+  // Intro output is either the writer's own words (Mode A) or clarifying
+  // questions (Mode B) — the AI-cliche sanitizer has no business rewriting it.
+  const isIntroSection = action === 'section' && sectionCfg?.mode === 'intro';
+  const shouldSanitize = SANITIZE_ACTIONS.has(action) && !isIntroSection;
+
   // Streaming path: send text deltas via SSE as the model writes them.
   if (req.body.stream === true) {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -1784,7 +1840,7 @@ Examples:
       if (runEditorPass(finalText)) {
         finalText = await editorPass(finalText, { brandVoice });
       }
-      if (SANITIZE_ACTIONS.has(action)) finalText = sanitizeAIVoice(finalText);
+      if (shouldSanitize) finalText = sanitizeAIVoice(finalText);
       if (finalText !== assembled) {
         res.write(`data: ${JSON.stringify({ clean: finalText })}\n\n`);
       }
@@ -1804,7 +1860,7 @@ Examples:
     if (runEditorPass(result)) {
       result = await editorPass(result, { brandVoice });
     }
-    if (SANITIZE_ACTIONS.has(action)) result = sanitizeAIVoice(result);
+    if (shouldSanitize) result = sanitizeAIVoice(result);
     return res.json({ result });
   } catch (e) {
     console.error('Anthropic error:', e.message);
