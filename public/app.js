@@ -2090,6 +2090,7 @@ function renderSettingsPage() {
     { id: 'morning-brew', label: 'Morning Brew' },
     { id: 'neutral-newsroom', label: 'Neutral Newsroom' },
     { id: 'sharp-political', label: 'Sharp Political' },
+    { id: 'hometown-paper', label: 'Hometown Paper' },
   ];
 
   return `
@@ -3085,8 +3086,26 @@ function toLeadSource(a) {
     source: a.source || hostnameOf(a.url) || '',
     url: a.url || '',
     summary: a.summary || '',
-    text: a.text ? a.text.slice(0, 6500) : '',
+    // The server's research pass reads the full article before extracting facts,
+    // so send the whole body. Bodies are stripped again before persisting
+    // (stripSourceBodies) and re-fetched on demand by hydrateAll.
+    text: a.text ? a.text.slice(0, 20000) : '',
   };
+}
+
+// Source bodies are big and fully re-fetchable, so they never go to the DB or
+// localStorage — only the metadata needed to re-hydrate them. Without this,
+// raising the text cap would multiply the size of every saved newsletter row.
+function stripSourceBodies(sections) {
+  const out = {};
+  for (const [key, arr] of Object.entries(sections || {})) {
+    if (!Array.isArray(arr)) { out[key] = arr; continue; }
+    out[key] = arr.map(item => {
+      if (!item || !Array.isArray(item._sources)) return item;
+      return { ...item, _sources: item._sources.map(({ text, ...rest }) => rest) };
+    });
+  }
+  return out;
 }
 
 // Returns the single synthesis entry for a section. Migrates any legacy
@@ -3131,6 +3150,7 @@ async function generateLeadStory(sectionId) {
   const sources = entry._sources || [];
   if (!sources.length) { toast('Add at least one article first', 'warn'); return; }
   entry.loading = true; entry.editing = false;
+  entry.genStatus = sources.length > 1 ? `Reading sources… 0/${sources.length}` : 'Reading the source…';
   refreshSectionContent(sectionId);
   const opts = { prompt: effectivePrompt(sectionId), contents: sources, section: sectionConfigFor(sectionId) };
   try {
@@ -3145,8 +3165,17 @@ async function generateLeadStory(sectionId) {
       else { const el = document.querySelector(`#story-${entry.id} .story-content`); if (el) el.innerHTML = formatContent(text); }
     };
 
+    // Research runs before the first token arrives. Update just the status line
+    // in place — a full re-render would restart the skeleton animation.
+    const onProgress = (p) => {
+      entry.genStatus = researchStatusLabel(p);
+      const el = document.querySelector(`#story-${entry.id} .gen-status`);
+      if (el) el.textContent = entry.genStatus;
+      else refreshSectionContent(sectionId);
+    };
+
     try {
-      entry.content = await callAIStream(action, sources[0], opts, onDelta);
+      entry.content = await callAIStream(action, sources[0], opts, onDelta, onProgress);
     } catch (streamErr) {
       if (['subscription_required', 'generation_limit'].includes(streamErr.message)) throw streamErr;
       // Streaming hiccup — fall back to the proven non-streaming path so generation never breaks
@@ -3269,7 +3298,7 @@ function renderLeadBody(sectionId) {
   if (entry?.loading) {
     return sourcesBlock + `<div class="story-block loading" id="story-${entry.id}">
       <div class="story-block-header"><span class="story-source">${cfg.label}</span>
-        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> Generating…</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> <span class="gen-status">${escHtml(entry.genStatus || 'Generating…')}</span></span>
       </div>
       <div class="story-skeleton">
         <div class="skeleton-line h-10 w-full"></div><div class="skeleton-line h-10 w-80"></div>
@@ -3356,7 +3385,7 @@ function renderIntroBody(sectionId) {
   if (entry?.loading) {
     return `<div class="story-block loading" id="story-${entry.id}">
       <div class="story-block-header"><span class="story-source">Intro</span>
-        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> Generating…</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--accent)"><div class="spinner"></div> <span class="gen-status">${escHtml(entry.genStatus || 'Generating…')}</span></span>
       </div>
       <div class="story-skeleton">
         <div class="skeleton-line h-10 w-full"></div><div class="skeleton-line h-10 w-80"></div>
@@ -4530,6 +4559,7 @@ function renderAIPanel() {
     { id: 'morning-brew', label: 'Morning Brew' },
     { id: 'neutral-newsroom', label: 'Neutral Newsroom' },
     { id: 'sharp-political', label: 'Sharp Political' },
+    { id: 'hometown-paper', label: 'Hometown Paper' },
   ];
   return `
 <div class="panel-section">
@@ -5229,7 +5259,32 @@ async function callAI(action, content, options = {}) {
 // Streaming variant: invokes onDelta(fullTextSoFar) as text arrives and returns
 // the final text. Falls back gracefully to a single JSON result in mock mode.
 // Callers should catch errors and fall back to callAI() for robustness.
-async function callAIStream(action, content, options = {}, onDelta) {
+// Turns a server research-phase progress event into the line shown under the
+// generation spinner. The research passes are deliberately slow — this is what
+// tells the user the model is reading sources rather than hanging.
+function researchStatusLabel(p) {
+  if (!p || !p.phase) return 'Generating…';
+  const { phase, done = 0, total = 0 } = p;
+  if (phase === 'reading') {
+    return total > 1
+      ? `Reading sources… ${done}/${total}`
+      : 'Reading the source…';
+  }
+  if (phase === 'cross-referencing') return 'Cross-referencing sources…';
+  if (phase === 'mapping')           return 'Mapping people and events…';
+  if (phase === 'judging')           return 'Weighing what leads…';
+  if (phase === 'outlining')         return 'Planning the story…';
+  if (phase === 'writing')           return 'Writing…';
+  if (phase === 'editing')           return total > 1 ? `Editing… pass ${done + 1}/${total}` : 'Editing the draft…';
+  if (phase === 'fact-checking') {
+    if (done && p.issues) return `Fact-checking… ${p.issues} correction${p.issues === 1 ? '' : 's'}`;
+    return 'Fact-checking against sources…';
+  }
+  if (phase === 'polishing')         return 'Polishing…';
+  return 'Generating…';
+}
+
+async function callAIStream(action, content, options = {}, onDelta, onProgress) {
   const authToken = await getAuthToken();
   const res = await fetch('/api/ai', {
     method: 'POST',
@@ -5276,6 +5331,7 @@ async function callAIStream(action, content, options = {}, onDelta) {
       let data; try { data = JSON.parse(line.slice(5).trim()); } catch { continue; }
       if (data.delta) { full += data.delta; onDelta && onDelta(full); }
       else if (data.clean) { full = data.clean; onDelta && onDelta(full); } // server-side voice-sanitized final text
+      else if (data.progress) { onProgress && onProgress(data.progress); }  // research-phase status
       else if (data.error) { throw new Error(data.error); }
     }
   }
@@ -6350,7 +6406,7 @@ function cacheBuilderDraft() {
     const nl = state.newsletter;
     localStorage.setItem(builderDraftKey(), JSON.stringify({
       title: nl.title, subject: nl.subject, previewText: nl.previewText,
-      subjectLines: nl.subjectLines, sections: nl.sections,
+      subjectLines: nl.subjectLines, sections: stripSourceBodies(nl.sections),
       sectionOrder: nl.sectionOrder, sectionMeta: nl.sectionMeta,
       prompts: nl.prompts, topStoriesContent: nl.topStoriesContent,
       ts: Date.now(),
@@ -6407,7 +6463,7 @@ async function saveNewsletter() {
     preview_text: state.newsletter.previewText,
     subject_lines: state.newsletter.subjectLines || [],
     sections: {
-      ...state.newsletter.sections,
+      ...stripSourceBodies(state.newsletter.sections),
       __order: state.newsletter.sectionOrder,
       __meta: state.newsletter.sectionMeta,
     },

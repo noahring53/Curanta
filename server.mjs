@@ -9,6 +9,17 @@ import Stripe from 'stripe';
 import rateLimit from 'express-rate-limit';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import {
+  runResearch, factCheck, buildWriterDossier, buildBriefDossier, researchCacheStats,
+  reviewDraft,
+} from './lib/research.mjs';
+import { extractStructuredArticle } from './lib/extract.mjs';
+
+// How much scraped article text we keep. The research pipeline's whole premise
+// is that the model reads the ARTICLE, not a fragment of it — the old 6,500-char
+// cap truncated most real news stories mid-body, so every downstream pass was
+// reasoning over a partial source. Raised to cover a long feature end to end.
+const ARTICLE_TEXT_CHARS = Number(process.env.ARTICLE_TEXT_CHARS || 20000);
 
 // ── SSRF guard ────────────────────────────────────────────────────────────────
 // Every endpoint that fetches a user-supplied URL must call assertSafeUrl first,
@@ -113,6 +124,35 @@ const anthropic = process.env.ANTHROPIC_API_KEY
 const MODEL       = process.env.ANTHROPIC_MODEL       || 'claude-sonnet-5';
 const MODEL_LEAD  = process.env.ANTHROPIC_MODEL_LEAD  || MODEL;
 const FALLBACK_MODEL = 'claude-sonnet-4-6';
+
+// ── Research pipeline config ──────────────────────────────────────────────────
+// The pipeline reads and cross-references sources BEFORE any prose is written
+// (see lib/research.mjs). It trades API calls for comprehension: a 4-source lead
+// story goes from 2 calls to ~8. That is the intended trade — the writer works
+// from a complete dossier instead of truncated raw text — but it is a real cost
+// multiplier, so it is switchable and bounded.
+//   RESEARCH_MODE=off        disable entirely (old single-call behaviour)
+//   RESEARCH_MODE=deep       full pipeline on long-form, extraction on short-form
+//   RESEARCH_MODE=long-form  full pipeline on long-form only; short-form untouched
+//
+// DEFAULTS TO OFF so the pipeline ships dark: the code deploys inert, the old
+// single-call path keeps running, and the new pipeline is activated by setting
+// RESEARCH_MODE=deep in the environment — no redeploy needed to turn it on, and
+// unsetting it is an instant rollback that cannot fail.
+const RESEARCH_MODE = (process.env.RESEARCH_MODE || 'off').toLowerCase();
+const MODEL_RESEARCH = process.env.ANTHROPIC_MODEL_RESEARCH || MODEL;
+const RESEARCH_MAX_SOURCES = Number(process.env.RESEARCH_MAX_SOURCES || 12);
+const RESEARCH_CONCURRENCY = Number(process.env.RESEARCH_CONCURRENCY || 4);
+// Pass 6. Costs one more call on the flagship pieces; catches number drift and
+// misattribution that no amount of prompting reliably prevents.
+const FACTCHECK_ENABLED = process.env.RESEARCH_FACTCHECK !== 'off';
+// Post-draft editorial review (critique → targeted revision → re-verify). The
+// single biggest quality lever after research itself: it is what stops the
+// pipeline shipping its first draft.
+const REVIEW_ENABLED = process.env.RESEARCH_REVIEW !== 'off';
+// Critique/revision is the most judgment-heavy step in the pipeline, so it
+// defaults to the strongest configured model rather than the research model.
+const MODEL_REVIEW = process.env.ANTHROPIC_MODEL_REVIEW || MODEL_LEAD;
 
 // Wraps anthropic.messages.create with an automatic model fallback: if the
 // requested model isn't available on this API key, retry once on the proven
@@ -336,7 +376,11 @@ function stripHtml(str = '') {
 }
 
 function timeAgo(dateStr) {
-  const diff = Date.now() - new Date(dateStr).getTime();
+  // Unknown publication dates stay unknown — see extractStructuredArticle.
+  if (!dateStr) return '';
+  const t = new Date(dateStr).getTime();
+  if (Number.isNaN(t)) return '';
+  const diff = Date.now() - t;
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
@@ -390,55 +434,15 @@ async function fetchArticle(url) {
   const html = await res.text();
   const $ = load(html);
 
-  // Strip junk
-  $(
-    'nav, header, footer, aside, .nav, .navbar, .header, .footer, .sidebar,' +
-    'script, style, noscript, iframe, template,' +
-    '.ad, .ads, .advertisement, .banner, .sponsored,' +
-    '.social-share, .share-buttons, .share-bar, .sharing,' +
-    '[class*="social-"], [class*="-share"], [class*="share-"],' +
-    '[class*="subscribe"], [class*="newsletter-signup"], [class*="paywall"],' +
-    'audio, video, .audio-player, [class*="audio-"], [class*="-audio"],' +
-    '[class*="cookie"], [class*="consent"], [class*="gdpr"], [class*="popup"],' +
-    'figure figcaption, [aria-hidden="true"],' +
-    '[class*="related"], [class*="recommended"], [class*="more-stories"],' +
-    '[class*="comment"], [class*="discussion"],' +
-    '[class*="modal"], [class*="overlay"],' +
-    '.byline-image, .author-image, .author-bio,' +
-    '[class*="listen-to"], [class*="text-to-speech"]'
-  ).remove();
+  // Images are read before extraction strips the page down — extractStructuredArticle
+  // removes figures/junk in place, and we still want og:image + content images.
+  const imageDoc = load(html);
 
-  // Try canonical content selectors
-  const candidates = [
-    'article [class*="content"]',
-    'article [class*="body"]',
-    'article',
-    '[role="main"] [class*="content"]',
-    '[role="main"] [class*="body"]',
-    '[role="main"]',
-    'main [class*="article"]',
-    'main [class*="story"]',
-    'main [class*="content"]',
-    '.article-body', '.article-content', '.article__body', '.article__content',
-    '.post-body', '.post-content', '.post__content',
-    '.entry-content', '.story-body', '.story-content',
-    '.content-body', '#article-body', '#main-content',
-    '.body-copy', '.body-text',
-  ];
-
-  let text = '';
-  for (const sel of candidates) {
-    const el = $(sel).first();
-    const candidate = el.text().replace(/\s+/g, ' ').trim();
-    if (candidate.length > 300) {
-      text = candidate.slice(0, 6500);
-      break;
-    }
-  }
-
-  if (!text) {
-    text = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 6500);
-  }
+  // Structured parse: preserves headings, quotes, lists, and captions as typed
+  // blocks instead of flattening the article into one whitespace-collapsed
+  // string (see lib/extract.mjs for why that mattered).
+  const parsed = extractStructuredArticle($, url, { limit: ARTICLE_TEXT_CHARS });
+  const text = parsed.markdown;
 
   const title =
     $('meta[property="og:title"]').attr('content') ||
@@ -452,16 +456,19 @@ async function fetchArticle(url) {
     $('meta[name="twitter:description"]').attr('content') ||
     '';
 
-  const publishedAt =
-    $('meta[property="article:published_time"]').attr('content') ||
-    $('time[datetime]').first().attr('datetime') ||
-    new Date().toISOString();
+  // Unknown stays unknown. This used to default to "now", which silently
+  // asserted every undated article was published today — a fabricated fact that
+  // poisoned every downstream chronology and recency judgement.
+  const publishedAt = parsed.publishedAt || null;
 
   const source =
     $('meta[property="og:site_name"]').attr('content') ||
     new URL(url).hostname.replace(/^www\./, '');
 
-  // Extract images — og:image first, then prominent content images
+  // Extract images — og:image first, then prominent content images.
+  // Read from the untouched copy: the structured parse strips containers in
+  // place, which would take legitimate content images with them.
+  const $img = imageDoc;
   const pageBase = new URL(url);
   const seenImages = new Set();
   const images = [];
@@ -481,16 +488,16 @@ async function fetchArticle(url) {
   };
 
   // Priority 1: Open Graph / Twitter card (usually the hero image)
-  addImage($('meta[property="og:image"]').attr('content'));
-  addImage($('meta[name="twitter:image"]').attr('content'));
-  addImage($('meta[name="twitter:image:src"]').attr('content'));
+  addImage($img('meta[property="og:image"]').attr('content'));
+  addImage($img('meta[name="twitter:image"]').attr('content'));
+  addImage($img('meta[name="twitter:image:src"]').attr('content'));
 
   // Priority 2: <img> tags inside article content — skip thumbnails < ~300px
-  $('article img, [class*="content"] img, [class*="body"] img, main img').each((_, el) => {
+  $img('article img, [class*="content"] img, [class*="body"] img, main img').each((_, el) => {
     if (images.length >= 6) return false; // stop after 6
-    const src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
-    const w = parseInt($(el).attr('width') || '0', 10);
-    const h = parseInt($(el).attr('height') || '0', 10);
+    const src = $img(el).attr('src') || $img(el).attr('data-src') || $img(el).attr('data-lazy-src');
+    const w = parseInt($img(el).attr('width') || '0', 10);
+    const h = parseInt($img(el).attr('height') || '0', 10);
     if (w && w < 200) return; // skip small images
     if (h && h < 150) return;
     addImage(src);
@@ -505,6 +512,9 @@ async function fetchArticle(url) {
     source,
     publishedAt,
     timeAgo: timeAgo(publishedAt),
+    byline: parsed.byline || '',
+    wordCount: parsed.wordCount,
+    structured: parsed.structured, // whether headings/quotes/lists survived parsing
     type: 'article',
     images: images.slice(0, 6), // max 6 images
     imageUrl: images[0] || null, // primary image
@@ -850,6 +860,7 @@ const TONES = {
   'morning-brew': 'You write like Morning Brew or Axios Markets: conversational and human, but the wit is dry, sparing, and always in service of a fact. Friendly without being chummy. Clever transitions earn their place by tying a real detail to the next one.',
   'neutral-newsroom': 'You write in the voice of a senior Reuters or AP reporter. Facts first, attribution clear, no hype, no opinion unless labeled. The reader trusts you because you don\'t reach.',
   'sharp-political': 'You write like Punchbowl, NOTUS, or a senior Politico Playbook contributor: insider context, named sources, specific procedural detail. Urgency comes from substance, not adjectives. No hot-takes — the reader is already informed.',
+  'hometown-paper': 'You write like a working reporter at a small-town paper — the kind of newsroom voice behind the Belleville Gazette or the Kingston Community Scoop. The lede is one flat sentence carrying the concrete result — a vote tally, a dollar figure, a date — never a mood-setter. Every detail is hyper-local and specific: street names, addresses, named officials, named coaches and business owners, not vague institutions ("the council," "a local business"). No national-media flourish, no "sources say," no scene-setting, no analysis for its own sake — just what happened, who did it, and what it means for someone three blocks away. Sentences are short and plain. A reader should be able to repeat the story at the mailbox.',
 };
 
 // ── Shared format-rule blocks ────────────────────────────────────────────────
@@ -944,7 +955,7 @@ const SECTION_LENGTH_SPECS = {
   perArticle:{ short: '40–70 words', medium: '70–100 words', long: '100–160 words' },
 };
 
-function sectionPrompt(section, items, preamble, customPrompt) {
+function sectionPrompt(section, items, preamble, customPrompt, research = null) {
   const s = section || {};
   const name = s.name || 'Section';
   const mode = s.mode || 'perArticle';
@@ -974,9 +985,16 @@ function sectionPrompt(section, items, preamble, customPrompt) {
     ? `\n\nSECTION BRIEF — the editor's own definition of what this section does. This defines the SUBSTANCE of what you write. Where it conflicts with the generic format guidance above, the brief wins (the grounding rules always apply):\n${brief}`
     : '';
 
-  const sourceList = items.map((a, i) =>
-    `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, mode === 'synthesis' && format === 'prose' ? 5000 : 2000)}`
-  ).join('\n\n---\n\n');
+  // With research, the writer works from the dossier — every fact, figure, and
+  // verbatim quote already extracted from the FULL articles — instead of the
+  // truncated raw text it used to see. Long-form gets the cross-source analysis
+  // and outline; short-form gets just the extracted facts.
+  const longForm = mode === 'synthesis' && format === 'prose';
+  const sourceList = research
+    ? (longForm ? buildWriterDossier(research) : buildBriefDossier(research))
+    : items.map((a, i) =>
+        `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, longForm ? 5000 : 2000)}`
+      ).join('\n\n---\n\n');
 
   return {
     system: `${preamble}
@@ -1342,7 +1360,7 @@ async function editorPass(draft, { brandVoice = '' } = {}) {
 // This detector counts them; when a draft comes back with enough of them, the
 // editor pass (normally lead-story-only) runs as a rescue rewrite. Costs a
 // second model call only on drafts that actually need it.
-const RESCUE_ACTIONS = new Set(['rewrite', 'summarize', 'cta']);
+const RESCUE_ACTIONS = new Set(['rewrite', 'summarize', 'cta', 'quick-hit']);
 const RESCUE_THRESHOLD = 2;
 
 function aiTellCount(text) {
@@ -1578,6 +1596,76 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
     .filter(Boolean)
     .join('\n');
 
+  // ── Which shape of section is this? ────────────────────────────────────────
+  // Declared before the research phase because they decide how much research an
+  // action gets, and the prompt builders below consume the result.
+  const sectionSynthProse = action === 'section'
+    && sectionCfg?.mode === 'synthesis' && (sectionCfg.format || 'prose') === 'prose';
+  // perArticle-mode sections are the config-driven equivalent of the hard-coded
+  // 'quick-hit' blurb (same short-prose shape) — eligible for the same rescue net.
+  const sectionPerArticleProse = action === 'section'
+    && (sectionCfg?.mode || 'perArticle') === 'perArticle';
+
+  // ── Research phase (passes 1–4) ────────────────────────────────────────────
+  // Long-form gets the full pipeline: read every source in full, cross-reference
+  // them, and plan the piece before a word is written. Short-form gets the
+  // extraction pass only — a one-line bullet needs the hardest extracted figure,
+  // not an assignment brief. Notes are cached across sections, so a source used
+  // in both the briefing and the lead story is read once.
+  const isIntroSection = action === 'section' && sectionCfg?.mode === 'intro';
+  const DEEP_RESEARCH = action === 'lead-story' || sectionSynthProse;
+  const BRIEF_RESEARCH = ['quick-hit', 'quick-hits', 'top-stories'].includes(action)
+    || (action === 'section' && !isIntroSection && !sectionSynthProse);
+
+  const wantsResearch = RESEARCH_MODE !== 'off' && !isIntroSection && (
+    DEEP_RESEARCH || (BRIEF_RESEARCH && RESEARCH_MODE === 'deep')
+  );
+
+  const researchItems = (contents.length ? contents : [content])
+    .filter(a => a && (a.text || a.summary || a.title));
+
+  // Streaming clients get live progress through the research phase — without it
+  // the user stares at a skeleton for the entire (deliberately slow) read.
+  const streaming = req.body.stream === true;
+  if (streaming) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // ask proxies not to buffer
+    res.flushHeaders?.();
+  }
+  const emit = (obj) => { if (streaming && !res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+
+  let research = null;
+  if (wantsResearch && researchItems.length) {
+    const startedAt = Date.now();
+    research = await runResearch(researchItems, {
+      create: createWithFallback,
+      model: MODEL_RESEARCH,
+      maxSources: RESEARCH_MAX_SOURCES,
+      concurrency: RESEARCH_CONCURRENCY,
+      withOutline: DEEP_RESEARCH,
+      withCrossRef: DEEP_RESEARCH,
+      brief: [sectionCfg?.instructions, customPrompt].filter(Boolean).join('\n\n'),
+      audience: audienceAvatar,
+      lengthSpec: sectionSynthProse
+        ? SECTION_LENGTH_SPECS.prose[sectionCfg?.length || 'medium']
+        : action === 'lead-story' ? '320–420 words, 4–6 paragraphs' : '',
+      onProgress: (p) => emit({ progress: p }),
+    });
+    if (research) {
+      const cachedCount = research.notes.filter(n => n._cached).length;
+      const c = research.complexity;
+      console.log(
+        `[research] ${action} — ${research.sourceCount} sources ` +
+        `(${cachedCount} cached), complexity=${c?.tier}/${c?.score}` +
+        `${c?.signals?.length ? ` [${c.signals.join('; ')}]` : ''}, ` +
+        `graph=${research.entities ? 'yes' : 'no'}, judgment=${research.judgment ? 'yes' : 'no'}, ` +
+        `outline=${research.outline ? 'yes' : 'no'}, ${Date.now() - startedAt}ms`
+      );
+    }
+  }
+
   const prompts = {
     'section': sectionCfg?.mode === 'intro'
       ? introPrompt(sectionCfg, customPrompt, toneDesc, voiceNote)
@@ -1585,14 +1673,17 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
           sectionCfg,
           contents.length ? contents : [content],
           `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}`,
-          customPrompt
+          customPrompt,
+          research
         ),
     'lead-story': (() => {
       const items = contents.length ? contents : [content];
       const multi = items.length > 1;
-      const sourceList = items.map((a, i) =>
-        `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 5000)}`
-      ).join('\n\n---\n\n');
+      const sourceList = research
+        ? buildWriterDossier(research)
+        : items.map((a, i) =>
+            `Source ${i + 1} — ${a.source || 'Unknown outlet'}\nURL: ${a.url || '(no url)'}\nTitle: ${a.title || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 5000)}`
+          ).join('\n\n---\n\n');
 
       const leadFormatRules = LEAD_FORMAT_RULES(multi);
 
@@ -1615,7 +1706,7 @@ The brand voice profile — if set — overrides everything else. Write as if yo
 Your task: write a newsletter lead story from the article below.${leadFormatRules}
 
 The brand voice profile — if set — overrides everything else. Write as if you ARE that writer.`,
-        user: `Write a lead story for this article.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${articleContext}`,
+        user: `Write a lead story for this article.\n${customPrompt ? `Editor's instructions: ${customPrompt}\n` : ''}\n${research ? sourceList : articleContext}`,
       };
     })(),
     'quick-hit': {
@@ -1633,7 +1724,7 @@ FORMAT:
     },
     'quick-hits': (() => {
       const items = contents.length ? contents : [content];
-      const articleList = items.map((a, i) =>
+      const articleList = research ? buildBriefDossier(research) : items.map((a, i) =>
         `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 2000)}`
       ).join('\n\n');
       return {
@@ -1699,13 +1790,13 @@ Your task: rewrite source material into newsletter copy a career reporter would 
       user: `Rewrite this for a newsletter:\n${customPrompt ? `Instructions: ${customPrompt}\n` : ''}\n${articleContext || content.text || content.summary}`,
     },
     summarize: {
-      system: `${GROUNDING}
+      system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 Write three sentences. No more, no less. Sentence 1: the single hardest fact (with the key number). Sentence 2: the most important context or implication, attributed if the source attributes it. Sentence 3: a specific thing to watch — a date, a decision pending, a named follow-up. No throat-clearing, no hedging, no "this represents" / "this highlights" / "in conclusion".`,
       user: `Summarize in 3 sentences:\n${articleContext}`,
     },
     hooks: {
-      system: `${toneDesc}${audienceNote}${GROUNDING}
+      system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write newsletter hooks — single punchy lines that make readers stop scrolling and want to read on. Each starts with →. No questions. Specific beats vague. Create intrigue by implying there's something most people don't know yet — but only tease facts that are actually in the source.`,
       user: `Write 4 hooks for this content:\n${articleContext}`,
@@ -1763,11 +1854,11 @@ Return ONLY a JSON array, no markdown fences, no commentary. One object per stor
     })(),
     'top-stories': (() => {
       const items = contents.length ? contents : [content];
-      const articleList = items.map((a, i) =>
+      const articleList = research ? buildBriefDossier(research) : items.map((a, i) =>
         `Article ${i + 1}:\nTitle: ${a.title || 'Untitled'}\nSource: ${a.source || ''}\nURL: ${a.url || ''}\nReport:\n${(a.text || a.summary || '').slice(0, 2000)}`
       ).join('\n\n');
       return {
-        system: `${GROUNDING}
+        system: `${toneDesc}${voiceNote}${audienceNote}${GROUNDING}
 
 You write a "Today's Briefing" section for a newsletter. Format: one line per article, no bullet points.
 
@@ -1791,10 +1882,6 @@ Examples:
 
   const p = prompts[action] || prompts.rewrite;
 
-  // Config-driven sections take their long-form profile from their mode
-  const sectionSynthProse = action === 'section'
-    && sectionCfg?.mode === 'synthesis' && (sectionCfg.format || 'prose') === 'prose';
-
   // Allow more tokens for long-form pieces and multi-article lists
   const maxTokens = action === 'brand-voice' ? 3000
     : ['lead-story', 'rewrite'].includes(action) || sectionSynthProse ? 2000
@@ -1810,34 +1897,97 @@ Examples:
   };
 
   // Long-form synthesized sections get the same editor pass as the lead story
+  const rescueEligible = RESCUE_ACTIONS.has(action) || sectionPerArticleProse;
   const runEditorPass = (text) => EDITOR_ACTIONS.has(action) || sectionSynthProse
-    || (RESCUE_ACTIONS.has(action) && aiTellCount(text) >= RESCUE_THRESHOLD);
+    || (rescueEligible && aiTellCount(text) >= RESCUE_THRESHOLD);
 
   // Intro output is either the writer's own words (Mode A) or clarifying
   // questions (Mode B) — the AI-cliche sanitizer has no business rewriting it.
-  const isIntroSection = action === 'section' && sectionCfg?.mode === 'intro';
   const shouldSanitize = SANITIZE_ACTIONS.has(action) && !isIntroSection;
 
+  // ── Post-draft review: editorial critique → targeted revision → verify ─────
+  // The first draft is a draft. On long-form the desk reads it against the
+  // research and the plan, revises only what it flagged, then re-verifies —
+  // revision is itself a place where facts drift. Simple stories stop after one
+  // round; a draft the desk calls structurally broken earns a second.
+  const wantsReview = REVIEW_ENABLED && research && DEEP_RESEARCH;
+  const wantsFactCheck = FACTCHECK_ENABLED && research && DEEP_RESEARCH;
+
+  const verifyDraft = async (text) => {
+    if (!text) return text;
+
+    if (wantsReview) {
+      const maxRounds = research.complexity?.tier === 'high' ? 2 : 1;
+      const startedAt = Date.now();
+      const { draft, changed, log, factIssues } = await reviewDraft(text, research, {
+        create: createWithFallback,
+        model: MODEL_REVIEW,
+        maxRounds,
+        factCheckAfter: FACTCHECK_ENABLED,
+        onProgress: (p) => emit({ progress: p }),
+      });
+      console.log(
+        `[review] ${action} — ${log.map(r => `r${r.round}:${r.verdict}/${r.issues}issues${r.rejected ? `/REJECTED:${r.rejected}` : ''}`).join(' ')} ` +
+        `changed=${changed} factIssues=${factIssues.length} ${Date.now() - startedAt}ms`
+      );
+      // reviewDraft already fact-checks anything it changed. An unchanged draft
+      // still needs verifying, so fall through in that case only.
+      if (changed) return draft;
+      text = draft;
+    }
+
+    if (!wantsFactCheck) return text;
+    emit({ progress: { phase: 'fact-checking', done: 0, total: 1 } });
+    const { draft, issues, applied } = await factCheck(text, research, {
+      create: createWithFallback, model: MODEL_RESEARCH,
+    });
+    if (issues.length) {
+      console.log(`[factcheck] ${action} — ${issues.length} issue(s), applied=${applied}: ` +
+        issues.map(i => i.problem).join(', '));
+    }
+    emit({ progress: { phase: 'fact-checking', done: 1, total: 1, issues: issues.length } });
+    return draft;
+  };
+
   // Streaming path: send text deltas via SSE as the model writes them.
-  if (req.body.stream === true) {
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // ask proxies not to buffer
-    res.flushHeaders?.();
-    try {
-      const stream = anthropic.messages.stream(params);
+  if (streaming) {
+    emit({ progress: { phase: 'writing', done: 0, total: 1 } });
+    // Mirrors createWithFallback for the streaming path: a model-not-found error
+    // used to fail the whole generation here even though the non-streaming path
+    // recovers automatically — same account, same request, inconsistent outcome
+    // depending on which code path a given action happens to take.
+    const runStream = async (streamParams) => {
       let assembled = '';
+      const stream = anthropic.messages.stream(streamParams);
       stream.on('text', (delta) => {
         assembled += delta;
         res.write(`data: ${JSON.stringify({ delta })}\n\n`);
       });
       await stream.finalMessage();
-      // Polish the final version and send it so the client replaces the
-      // streamed draft: editor pass (lead story only) then the sanitizer.
-      // User sees live streaming, then it tightens at the end.
+      return assembled;
+    };
+    try {
+      let assembled;
+      try {
+        assembled = await runStream(params);
+      } catch (e) {
+        const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
+        // Only retry if no partial output was streamed yet — the client hasn't
+        // rendered anything it would need "un-shown" for a clean restart.
+        if (notFound && params.model !== FALLBACK_MODEL) {
+          console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
+          assembled = await runStream({ ...params, model: FALLBACK_MODEL });
+        } else {
+          throw e;
+        }
+      }
+      // Post-write passes, in order: fact-check the draft against the research
+      // (6), then the readability edit (7), then the deterministic sanitizer.
+      // The user watches the draft stream live, then sees it tighten at the end.
       let finalText = assembled;
+      finalText = await verifyDraft(finalText);
       if (runEditorPass(finalText)) {
+        emit({ progress: { phase: 'polishing', done: 0, total: 1 } });
         finalText = await editorPass(finalText, { brandVoice });
       }
       if (shouldSanitize) finalText = sanitizeAIVoice(finalText);
@@ -1857,6 +2007,7 @@ Examples:
   try {
     const message = await createWithFallback(params);
     let result = message.content[0].text;
+    result = await verifyDraft(result);
     if (runEditorPass(result)) {
       result = await editorPass(result, { brandVoice });
     }

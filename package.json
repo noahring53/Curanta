@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node --watch server.mjs"
+    "dev": "node --watch server.mjs",
+    "test": "node lib/extract.test.mjs && node lib/research.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
