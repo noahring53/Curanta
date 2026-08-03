@@ -1440,124 +1440,47 @@ input[type="color"] {
 }
 
 /* ── Articles ─────────────────────────────────────────────────────────────────
-   Its own workflow, so it gets its own surface: a two-column setup (source →
-   direction) that gives way to a full-width editor once a draft exists. */
-.art-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-.art-card { padding: 20px 22px; }
-.art-card-dim { opacity: 0.55; transition: opacity 0.18s; }
-.art-card-dim:focus-within { opacity: 1; }
+   Articles runs inside the builder's own shell, so it needs almost no CSS of
+   its own. What's here is only what the builder has no equivalent for: a wider
+   sidebar (Articles has no right panel, so the source list gets that room), a
+   selected state for a source row, and block typography for the contenteditable
+   draft. Every value below is a token or a copy of the matching builder rule. */
+.source-sidebar-wide { width: clamp(300px, 33%, 420px); }
 
-.art-step { display: flex; gap: 11px; align-items: flex-start; }
-.art-step-num {
-  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
-  background: var(--accent-soft); color: var(--accent);
-  font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+.art-list { display: flex; flex-direction: column; gap: 6px; padding: 0 8px; }
+/* Rows are picked, not dragged, so the grab cursor and drag affordances are off. */
+.art-list .article-card { cursor: pointer; }
+/* Matches .tone-chip.active — the app's existing "this one is chosen" treatment. */
+.article-card.selected {
+  background: var(--accent-soft); border-color: rgba(99,102,241,0.35);
 }
-.art-step-title { font-size: 14px; font-weight: 650; color: var(--text-1); }
-.art-step-sub { font-size: 12px; color: var(--text-3); margin-top: 1px; line-height: 1.45; }
+.article-card.selected .article-card-title { color: var(--accent); }
+.article-card .spinner { width: 10px; height: 10px; border-width: 1.5px; }
+.art-favicon { width: 12px; height: 12px; border-radius: 2px; object-fit: contain; flex-shrink: 0; }
 
-.art-label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-2); margin-bottom: 5px; letter-spacing: 0.01em; }
-.art-label-opt { font-weight: 400; color: var(--text-3); }
-.art-hint { font-size: 11px; color: var(--text-3); margin-top: 6px; line-height: 1.5; }
-.art-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
-.art-empty-inline {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--text-3); background: var(--bg-3);
-  border: 1px dashed var(--border-md); border-radius: var(--r-sm); padding: 10px 12px;
+/* The draft surface. Sizing follows .story-content (13px / 1.7) — these rules
+   add only the block-level typography a rich text document needs. */
+.article-editor {
+  padding: 12px; font-size: 13px; line-height: 1.7; color: var(--text-1);
+  outline: none; min-height: 340px; word-break: break-word;
 }
-
-/* Selected source */
-.art-source-card { background: var(--bg-3); border: 1px solid var(--border-md); border-radius: var(--r-md); padding: 14px 16px; margin-top: 14px; }
-.art-source-title { font-size: 14px; font-weight: 650; color: var(--text-1); line-height: 1.4; }
-.art-source-meta { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
-.art-source-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-.art-source-preview {
-  margin-top: 10px; font-size: 12px; color: var(--text-2); line-height: 1.6;
-  max-height: 96px; overflow: hidden; border-left: 2px solid var(--border-md); padding-left: 10px;
-}
-.art-source-link { display: block; margin-top: 10px; font-size: 11px; color: var(--accent); word-break: break-all; }
-.art-source-link:hover { text-decoration: underline; }
-
-/* Feed picker */
-.art-feed-list { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
-.art-feed { border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
-.art-feed-head {
-  display: flex; justify-content: space-between; align-items: center; gap: 8px;
-  padding: 8px 11px; background: var(--bg-3); font-size: 12px; font-weight: 600; color: var(--text-2);
-}
-.art-feed-item {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 10px; width: 100%;
-  padding: 8px 11px; text-align: left; border-top: 1px solid var(--border);
-  background: none; color: var(--text-1); font-size: 12.5px; line-height: 1.45;
-}
-.art-feed-item:hover:not(:disabled) { background: var(--accent-soft); }
-.art-feed-item:disabled { opacity: 0.4; cursor: default; }
-.art-feed-item-title { flex: 1; min-width: 0; }
-.art-feed-item-time { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
-
-.art-url-form { display: flex; gap: 8px; }
-.art-url-form .input { flex: 1; }
-
-/* Live draft as it streams in — plain text on purpose: re-parsing markdown on
-   every token would cost more than the generation itself. */
-.art-stream {
-  margin-top: 14px; max-height: 260px; overflow-y: auto;
-  background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: 12px 14px; font-size: 12.5px; line-height: 1.65; color: var(--text-2);
-  white-space: pre-wrap; word-break: break-word;
-}
-
-/* Lists */
-.art-draft-row, .art-prompt-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 18px; }
-.art-draft-title { font-size: 13.5px; font-weight: 650; color: var(--text-1); }
-.art-draft-meta { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
-.art-prompt-preview { font-size: 11.5px; color: var(--text-2); margin-top: 7px; line-height: 1.55; white-space: pre-wrap; }
-.art-prompt-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
-.art-prompts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-
-/* Editor */
-.art-editor-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
-.art-editor-main { padding: 20px 24px 8px; }
-.art-title-input {
-  width: 100%; background: none; border: none; outline: none;
-  font-size: 26px; font-weight: 750; letter-spacing: -0.02em; color: var(--text-1); line-height: 1.25;
-}
-.art-title-input::placeholder { color: var(--text-3); }
-.art-toolbar {
-  display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
-  margin: 14px 0 4px; padding: 6px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; background: var(--bg-2); z-index: 2;
-}
-.art-tool {
-  min-width: 28px; height: 28px; padding: 0 7px; border-radius: var(--r-sm);
-  font-size: 12.5px; color: var(--text-2); background: none;
-}
-.art-tool:hover { background: var(--bg-4); color: var(--text-1); }
-.art-toolbar-sep { width: 1px; height: 18px; background: var(--border-md); margin: 0 5px; }
-
-.art-editor { min-height: 460px; padding: 18px 2px 40px; outline: none; font-size: 15px; line-height: 1.75; color: var(--text-1); }
-.art-editor:focus { outline: none; }
-.art-editor p { margin: 0 0 15px; }
-.art-editor h2 { font-size: 19px; font-weight: 700; margin: 26px 0 10px; letter-spacing: -0.01em; }
-.art-editor h3 { font-size: 16px; font-weight: 650; margin: 22px 0 8px; }
-.art-editor blockquote {
-  margin: 16px 0; padding: 4px 0 4px 16px; border-left: 3px solid var(--accent);
+.article-editor:focus { outline: none; }
+.article-editor:empty::before { content: attr(data-placeholder); color: var(--text-3); }
+.article-editor p { margin: 0 0 12px; }
+.article-editor h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; margin: 18px 0 8px; }
+.article-editor h3 { font-size: 13.5px; font-weight: 650; margin: 15px 0 6px; }
+.article-editor h2:first-child, .article-editor h3:first-child { margin-top: 0; }
+.article-editor blockquote {
+  margin: 12px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--accent);
   color: var(--text-2); font-style: italic;
 }
-.art-editor ul, .art-editor ol { margin: 0 0 15px 22px; }
-.art-editor ul { list-style: disc; }
-.art-editor ol { list-style: decimal; }
-.art-editor li { margin-bottom: 6px; }
-.art-editor a { color: var(--accent); text-decoration: underline; }
-.art-editor hr { border: none; border-top: 1px solid var(--border-md); margin: 24px 0; }
-
-.art-editor-side { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 16px; }
-.art-side-card { padding: 16px 18px; }
-.art-side-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); margin-bottom: 8px; }
-.art-side-body { font-size: 12.5px; color: var(--text-2); line-height: 1.6; white-space: pre-wrap; }
-.art-save-state { font-size: 11px; color: var(--text-3); margin-top: 8px; }
+.article-editor ul, .article-editor ol { margin: 0 0 12px 20px; }
+.article-editor ul { list-style: disc; }
+.article-editor ol { list-style: decimal; }
+.article-editor li { margin-bottom: 4px; }
+.article-editor a { color: var(--accent); text-decoration: underline; }
+.article-editor hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
 @media (max-width: 1100px) {
-  .art-grid, .art-editor-wrap { grid-template-columns: 1fr; }
-  .art-editor-side { position: static; }
+  .source-sidebar-wide { width: clamp(240px, 38%, 340px); }
 }

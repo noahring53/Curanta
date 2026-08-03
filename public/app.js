@@ -321,7 +321,10 @@ function render() {
   else if (state.view === 'publications') root.innerHTML = renderPublicationsPage();
   attachEvents();
   if (state.view === 'builder') { applyDesignSettings(); setupDropZones(); }
-  if (state.view === 'articles') articlesAfterRender();
+  // Articles renders the builder's components, so it must honour the same
+  // Design settings — without this the user's brand colour and corner radius
+  // apply in Newsletter and silently revert to defaults one tab away.
+  if (state.view === 'articles') { applyDesignSettings(); articlesAfterRender(); }
 }
 
 // ── EVENT DISPATCHER ──────────────────────────────────────────────────────────
@@ -2660,9 +2663,13 @@ function removeArticle(feedId, articleId) {
   if (feed) { feed.articles = feed.articles.filter(a => a.id !== articleId); refreshSourceSidebar(); }
 }
 
+// Both the builder and Articles render their feed list into #sources-list, and
+// share submitAddSource / quickAddFeed / removeFeed / autoFetchSources. This is
+// the one place that has to know which list is on screen.
 function refreshSourceSidebar() {
   const el = document.getElementById('sources-list');
-  if (el) el.innerHTML = renderSourceSidebar();
+  if (!el) return;
+  el.innerHTML = state.view === 'articles' ? renderArticleSourceList() : renderSourceSidebar();
 }
 
 // ── SMART STORY SCORING ───────────────────────────────────────────────────────
