@@ -14,6 +14,7 @@ import {
   reviewDraft,
 } from './lib/research.mjs';
 import { extractStructuredArticle } from './lib/extract.mjs';
+import { registerArticleRoutes } from './lib/articles.mjs';
 
 // How much scraped article text we keep. The research pipeline's whole premise
 // is that the model reads the ARTICLE, not a fragment of it — the old 6,500-char
@@ -123,6 +124,9 @@ const anthropic = process.env.ANTHROPIC_API_KEY
 // account doesn't have access to it yet (see createWithFallback).
 const MODEL       = process.env.ANTHROPIC_MODEL       || 'claude-sonnet-5';
 const MODEL_LEAD  = process.env.ANTHROPIC_MODEL_LEAD  || MODEL;
+// Articles are long-form single-source pieces — same class of work as the lead
+// story, so they follow MODEL_LEAD unless pinned separately.
+const MODEL_ARTICLE = process.env.ANTHROPIC_MODEL_ARTICLE || MODEL_LEAD;
 const FALLBACK_MODEL = 'claude-sonnet-4-6';
 
 // ── Research pipeline config ──────────────────────────────────────────────────
@@ -210,6 +214,49 @@ async function sbPatch(table, filter, updates, useServiceRole = false) {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error(`[sbPatch] ${table} FAILED (${res.status}):`, text.slice(0, 300));
+  }
+}
+
+// ── Subscription + usage metering ─────────────────────────────────────────────
+// Shared by every endpoint that spends model tokens (/api/ai, /api/articles/*)
+// so a new AI feature cannot accidentally ship without billing attached.
+// Returns null when the request may proceed, or { status, body } to refuse with.
+// A failure to CHECK never blocks generation — a Supabase blip should not become
+// an outage for paying users.
+async function checkAndMeterUsage(userId = '', authToken = '') {
+  if (!userId || !authToken || !SUPABASE_URL) return null;
+  try {
+    const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
+    if (!settings) return null;
+
+    const allowed = settings.grandfathered
+      || ['active', 'trialing', 'past_due'].includes(settings.subscription_status);
+    if (!allowed) return { status: 402, body: { error: 'subscription_required' } };
+    if (settings.grandfathered) return null;
+
+    const resetAt = new Date(settings.generations_reset_at || 0);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    if (resetAt < thirtyDaysAgo) {
+      // Fire-and-forget: resets the counter and stamps a new 30-day window.
+      sbPatch('user_settings', `user_id=eq.${userId}`,
+        { generations_this_month: 1, generations_reset_at: new Date().toISOString() }, false);
+      return null;
+    }
+    if ((settings.generations_this_month || 0) >= GENERATION_LIMIT) {
+      return {
+        status: 429,
+        body: {
+          error: 'generation_limit',
+          message: `Monthly limit of ${GENERATION_LIMIT} generations reached. Resets in ${Math.ceil((resetAt.getTime() + 30 * 24 * 60 * 60 * 1000 - Date.now()) / 86400000)} days.`,
+        },
+      };
+    }
+    sbPatch('user_settings', `user_id=eq.${userId}`,
+      { generations_this_month: (settings.generations_this_month || 0) + 1 }, false);
+    return null;
+  } catch (err) {
+    console.error('Subscription check error:', err.message);
+    return null;
   }
 }
 
@@ -1543,39 +1590,8 @@ app.post('/api/ai', aiLimiter, async (req, res) => {
   }
 
   // ── Subscription + usage check ─────────────────────────────────────────────
-  if (userId && authToken && SUPABASE_URL) {
-    try {
-      const settings = await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
-      if (settings) {
-        const allowed = settings.grandfathered || ['active', 'trialing', 'past_due'].includes(settings.subscription_status);
-        if (!allowed) {
-          return res.status(402).json({ error: 'subscription_required' });
-        }
-        if (!settings.grandfathered) {
-          // Reset counter if it's been > 30 days
-          const resetAt = new Date(settings.generations_reset_at || 0);
-          const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-          if (resetAt < thirtyDaysAgo) {
-            sbPatch('user_settings', `user_id=eq.${userId}`,
-              { generations_this_month: 1, generations_reset_at: new Date().toISOString() },
-              false); // fire-and-forget — resets counter and stamps new 30-day window
-          } else if ((settings.generations_this_month || 0) >= GENERATION_LIMIT) {
-            return res.status(429).json({
-              error: 'generation_limit',
-              message: `Monthly limit of ${GENERATION_LIMIT} generations reached. Resets in ${Math.ceil((resetAt.getTime() + 30*24*60*60*1000 - Date.now()) / 86400000)} days.`,
-            });
-          } else {
-            sbPatch('user_settings', `user_id=eq.${userId}`,
-              { generations_this_month: (settings.generations_this_month || 0) + 1 },
-              false); // fire-and-forget
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Subscription check error:', err.message);
-      // Don't block generation on subscription check failure
-    }
-  }
+  const denial = await checkAndMeterUsage(userId, authToken);
+  if (denial) return res.status(denial.status).json(denial.body);
 
   const toneDesc = TONES[tone] || TONES['punchy-executive'];
   const voiceNote = brandVoice
@@ -2017,6 +2033,77 @@ Examples:
     console.error('Anthropic error:', e.message);
     return res.status(500).json({ error: e.message });
   }
+});
+
+// ── /api/articles/* ───────────────────────────────────────────────────────────
+// The Articles feature (see lib/articles.mjs). Every dependency it needs already
+// exists here — the SSRF-checked scraper, the model wrapper with its automatic
+// fallback, and the usage meter — so the feature adds endpoints without adding
+// a second copy of any of them.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Master prompts are read here, server-side, by ID. That is the whole point of
+// the prompt library: a long house-style prompt is stored once and never
+// travels over the wire on each generation. RLS still applies — the read runs
+// with the caller's own token, so a guessed ID returns nothing.
+async function loadArticlePrompt(promptId, userId, authToken) {
+  if (!SUPABASE_URL || !authToken) return null;
+  if (!UUID_RE.test(String(promptId || '')) || !UUID_RE.test(String(userId || ''))) return null;
+  try {
+    return await sbGet('article_prompts', `id=eq.${promptId}&user_id=eq.${userId}`, authToken);
+  } catch (e) {
+    console.error('[articles] prompt load failed:', e.message);
+    return null;
+  }
+}
+
+// Anthropic-backed writer. Kept behind a plain ({system,user,…}) → text seam so
+// a second provider is a second function here, not a change to the feature.
+async function generateArticleText({ system, user, maxTokens, temperature, onDelta }) {
+  const params = {
+    model: MODEL_ARTICLE,
+    max_tokens: maxTokens,
+    temperature,
+    system,
+    messages: [{ role: 'user', content: user }],
+  };
+
+  if (!onDelta) {
+    const message = await createWithFallback(params);
+    return message.content[0].text;
+  }
+
+  let streamed = 0;
+  const runStream = async (p) => {
+    let assembled = '';
+    const stream = anthropic.messages.stream(p);
+    stream.on('text', (delta) => { assembled += delta; streamed += delta.length; onDelta(delta); });
+    await stream.finalMessage();
+    return assembled;
+  };
+
+  try {
+    return await runStream(params);
+  } catch (e) {
+    const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
+    // Only retry when nothing has been shown yet — a mid-stream restart would
+    // duplicate text the reader is already watching.
+    if (notFound && streamed === 0 && params.model !== FALLBACK_MODEL) {
+      console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
+      return runStream({ ...params, model: FALLBACK_MODEL });
+    }
+    throw e;
+  }
+}
+
+registerArticleRoutes(app, {
+  fetchArticle,
+  generate: generateArticleText,
+  hasAI: Boolean(anthropic),
+  checkUsage: checkAndMeterUsage,
+  loadPrompt: loadArticlePrompt,
+  extractLimiter: ingestLimiter,
+  generateLimiter: aiLimiter,
 });
 
 // ── /api/publish/beehiiv ─────────────────────────────────────────────────────

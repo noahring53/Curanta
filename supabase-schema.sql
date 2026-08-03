@@ -94,6 +94,47 @@ alter table sources add column if not exists publication_id uuid references publ
 alter table sources drop constraint if exists sources_user_id_feed_url_key;
 create unique index if not exists sources_user_feed_pub_key on sources (user_id, feed_url, publication_id);
 
+-- ── article_prompts ───────────────────────────────────────────────────────────
+-- The Prompt Library. Master prompts live here so generation only ever sends an
+-- ID: the server reads the prompt text itself, and a long house-style prompt is
+-- never re-uploaded from the browser on each article.
+create table if not exists article_prompts (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid references auth.users(id) on delete cascade not null,
+  name           text not null default 'Untitled prompt',
+  description    text default '',
+  prompt         text not null default '',
+  is_default     boolean default false,
+  mode           text default 'news',   -- news | seo | opinion | rewrite (future modes)
+  publication_id uuid references publications(id) on delete cascade, -- NULL = Default publication
+  created_at     timestamptz default now(),
+  updated_at     timestamptz default now()
+);
+create index if not exists article_prompts_user_idx on article_prompts (user_id, publication_id);
+
+-- ── articles ──────────────────────────────────────────────────────────────────
+-- Generated drafts. body_html (not markdown) because the rich text editor is the
+-- system of record once a draft is opened — round-tripping through markdown
+-- would silently drop the formatting the writer added.
+create table if not exists articles (
+  id                 uuid primary key default gen_random_uuid(),
+  user_id            uuid references auth.users(id) on delete cascade not null,
+  title              text not null default 'Untitled Article',
+  body_html          text default '',
+  angle              text default '',
+  notes              text default '',
+  mode               text default 'news',
+  source_url         text default '',
+  source_title       text default '',
+  source_publication text default '',
+  prompt_id          uuid references article_prompts(id) on delete set null,
+  status             text default 'draft' check (status in ('draft','review','published')),
+  publication_id     uuid references publications(id) on delete set null, -- NULL = Default publication
+  created_at         timestamptz default now(),
+  updated_at         timestamptz default now()
+);
+create index if not exists articles_user_idx on articles (user_id, publication_id, updated_at desc);
+
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 create or replace function set_updated_at()
 returns trigger as $$
@@ -108,6 +149,16 @@ create trigger newsletters_updated_at
 drop trigger if exists user_settings_updated_at on user_settings;
 create trigger user_settings_updated_at
   before update on user_settings
+  for each row execute function set_updated_at();
+
+drop trigger if exists articles_updated_at on articles;
+create trigger articles_updated_at
+  before update on articles
+  for each row execute function set_updated_at();
+
+drop trigger if exists article_prompts_updated_at on article_prompts;
+create trigger article_prompts_updated_at
+  before update on article_prompts
   for each row execute function set_updated_at();
 
 -- ── Auto-create a user_settings row on signup ─────────────────────────────────
@@ -128,10 +179,12 @@ create trigger on_auth_user_created
   for each row execute function handle_new_user();
 
 -- ── Row-Level Security ────────────────────────────────────────────────────────
-alter table user_settings enable row level security;
-alter table publications  enable row level security;
-alter table newsletters   enable row level security;
-alter table sources       enable row level security;
+alter table user_settings   enable row level security;
+alter table publications    enable row level security;
+alter table newsletters     enable row level security;
+alter table sources         enable row level security;
+alter table article_prompts enable row level security;
+alter table articles        enable row level security;
 
 -- user_settings: users own their own row
 drop policy if exists "user_settings: select own" on user_settings;
@@ -170,3 +223,25 @@ create policy "sources: select own" on sources for select using (auth.uid() = us
 create policy "sources: insert own" on sources for insert with check (auth.uid() = user_id);
 create policy "sources: update own" on sources for update using (auth.uid() = user_id);
 create policy "sources: delete own" on sources for delete using (auth.uid() = user_id);
+
+-- article_prompts: users own their own rows. The server reads these with the
+-- caller's own token, so these policies are what stop one user's prompt ID
+-- resolving against another user's library.
+drop policy if exists "article_prompts: select own" on article_prompts;
+drop policy if exists "article_prompts: insert own" on article_prompts;
+drop policy if exists "article_prompts: update own" on article_prompts;
+drop policy if exists "article_prompts: delete own" on article_prompts;
+create policy "article_prompts: select own" on article_prompts for select using (auth.uid() = user_id);
+create policy "article_prompts: insert own" on article_prompts for insert with check (auth.uid() = user_id);
+create policy "article_prompts: update own" on article_prompts for update using (auth.uid() = user_id);
+create policy "article_prompts: delete own" on article_prompts for delete using (auth.uid() = user_id);
+
+-- articles: users own their own rows
+drop policy if exists "articles: select own" on articles;
+drop policy if exists "articles: insert own" on articles;
+drop policy if exists "articles: update own" on articles;
+drop policy if exists "articles: delete own" on articles;
+create policy "articles: select own" on articles for select using (auth.uid() = user_id);
+create policy "articles: insert own" on articles for insert with check (auth.uid() = user_id);
+create policy "articles: update own" on articles for update using (auth.uid() = user_id);
+create policy "articles: delete own" on articles for delete using (auth.uid() = user_id);

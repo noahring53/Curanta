@@ -265,6 +265,8 @@ async function navigate(view, params = {}) {
     state.sources = await loadSourcesFromDB();
     autoFetchSources();
   }
+  // Articles is its own workflow (see articles.js) but shares the same feeds.
+  if (view === 'articles') await articlesOnNavigate();
 
   if (view === 'builder') {
     if (params.id && params.id !== state.newsletterId) {
@@ -312,12 +314,14 @@ function render() {
   if (state.view === 'landing') root.innerHTML = renderLanding();
   else if (state.view === 'dashboard') root.innerHTML = renderDashboard();
   else if (state.view === 'builder') root.innerHTML = renderBuilder();
+  else if (state.view === 'articles') root.innerHTML = renderArticlesPage();
   else if (state.view === 'sources') root.innerHTML = renderSourcesPage();
   else if (state.view === 'settings') root.innerHTML = renderSettingsPage();
   else if (state.view === 'subscription') root.innerHTML = renderSubscriptionPage();
   else if (state.view === 'publications') root.innerHTML = renderPublicationsPage();
   attachEvents();
   if (state.view === 'builder') { applyDesignSettings(); setupDropZones(); }
+  if (state.view === 'articles') articlesAfterRender();
 }
 
 // ── EVENT DISPATCHER ──────────────────────────────────────────────────────────
@@ -339,6 +343,10 @@ function handleClick(e) {
   e.preventDefault();
   const { action } = el.dataset;
   const d = el.dataset;
+
+  // Articles owns its own actions (articles.js) — everything art-* routes there
+  // rather than growing this switch by another twenty cases.
+  if (action.startsWith('art-')) { articlesHandleAction(action, d); return; }
 
   switch (action) {
     case 'navigate':        navigate(d.view); break;
@@ -382,7 +390,7 @@ function handleClick(e) {
         .map(id => ({ id, name: state.newsletter.sectionMeta[id]?.name || id, type: state.newsletter.sectionMeta[id]?.type || 'generic' }));
       if (!secs.length) { toast('No sections in current newsletter', 'warn'); break; }
       setUserSections(secs);
-      toast('Imported from builder — these are now your template', 'success');
+      toast('Imported from Newsletter — these are now your template', 'success');
       break;
     }
     case 'reset-section-layout': {
@@ -472,10 +480,12 @@ function handleSubmit(e) {
   else if (form.id === 'source-form') { e.preventDefault(); submitAddSource(form); }
   else if (form.id === 'comment-form') { e.preventDefault(); submitComment(form); }
   else if (form.id === 'voice-url-form') { e.preventDefault(); fetchVoiceURL(form); }
+  else if (form.id === 'art-url-form') { e.preventDefault(); articlesHandleSubmit(form); }
 }
 
 function handleInput(e) {
   const t = e.target;
+  if (t.id?.startsWith('art-') && articlesHandleInput(t)) return;
   if (t.matches('.newsletter-title-input')) { state.newsletter.title = t.value; scheduleSave(); }
   else if (t.matches('#subject-input')) { state.newsletter.subject = t.value; scheduleSave(); }
   else if (t.matches('#preview-input')) { state.newsletter.previewText = t.value; scheduleSave(); }
@@ -1645,7 +1655,7 @@ function renderDashboard() {
           <div class="onboard-banner-title">Welcome to Curanta 👋</div>
           <div class="onboard-banner-sub">You're set up. Here's how to publish your first newsletter in under 15 minutes:</div>
           <div class="onboard-steps">
-            <div class="onboard-step"><div class="onboard-num">1</div><div><strong>Add a source</strong> — paste an RSS feed URL or any article link in the builder's Sources panel.</div></div>
+            <div class="onboard-step"><div class="onboard-num">1</div><div><strong>Add a source</strong> — paste an RSS feed URL or any article link in the Newsletter Sources panel.</div></div>
             <div class="onboard-step"><div class="onboard-num">2</div><div><strong>Add articles to a section</strong> — use each article's <strong>＋ Add to section</strong> menu, or drag it in.</div></div>
             <div class="onboard-step"><div class="onboard-num">3</div><div><strong>Click ✦ Generate</strong> — AI writes each section in your voice. Then <strong>Copy HTML</strong> or <strong>Copy for Beehiiv</strong> to publish.</div></div>
           </div>
@@ -1703,7 +1713,7 @@ function renderDashboard() {
           <div class="feed-health-list">
             ${state.sources.length === 0 ? `
             <div style="background:var(--bg-2);border:1px solid var(--border);border-radius:var(--r-md);padding:16px;text-align:center;color:var(--text-3);font-size:12px">
-              No RSS feeds yet — add them in the builder.
+              No RSS feeds yet — add them in Newsletter or Sources.
             </div>` : state.sources.map(s => `
             <div class="feed-health-item">
               <span class="dot dot-green"></span>
@@ -2183,7 +2193,7 @@ function renderSettingsPage() {
       <!-- ── SUBJECT LINE GENERATOR ── -->
       <div class="settings-section" id="subject-generator-settings">
         <div class="settings-section-title">Subject Line Generator</div>
-        <div class="settings-section-sub">The <strong>evergreen prompt</strong> is the standing instruction prepended to every subject-line generation in the builder's Subjects panel. Edit it here or in the panel's ⚙ — same setting.</div>
+        <div class="settings-section-sub">The <strong>evergreen prompt</strong> is the standing instruction prepended to every subject-line generation in the Newsletter Subjects panel. Edit it here or in the panel's ⚙ — same setting.</div>
         <textarea id="subject-evergreen" class="input" rows="10"
           style="width:100%;resize:vertical;font-size:13px;line-height:1.7;margin-top:14px;font-family:inherit"
         >${escHtml(subjectSettings().evergreen)}</textarea>
@@ -2200,7 +2210,7 @@ function renderSettingsPage() {
         const hasBuilderSections = state.newsletter.sectionOrder?.length > 0;
         return `<div class="settings-section">
         <div class="settings-section-title">Section Template${canUsePubs() ? ` <span style="font-size:11px;font-weight:600;color:var(--accent);background:var(--bg-3);padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px">📰 ${escHtml(currentPublicationName())}</span>` : ''}</div>
-        <div class="settings-section-sub">These sections <strong>are</strong> your builder template — every new newsletter${canUsePubs() ? ' in <strong>' + escHtml(currentPublicationName()) + '</strong>' : ''} starts with exactly these sections, in this order, with these prompts pre-filled. Edit here and the builder follows.</div>
+        <div class="settings-section-sub">These sections <strong>are</strong> your Newsletter template — every new newsletter${canUsePubs() ? ' in <strong>' + escHtml(currentPublicationName()) + '</strong>' : ''} starts with exactly these sections, in this order, with these prompts pre-filled. Edit here and Newsletter follows.</div>
         ${userSections.length === 0 ? `
         <div style="padding:28px 24px;border:1px dashed var(--border-md);border-radius:var(--r-md);margin-top:16px;text-align:center">
           <div style="font-size:28px;margin-bottom:10px">📋</div>
@@ -2213,14 +2223,14 @@ function renderSettingsPage() {
             placeholder="Today's Briefing&#10;Lead Story&#10;Quick Hits&#10;Sponsor / CTA"></textarea>
           <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
             <button class="btn btn-primary" data-action="save-section-layout">Create template</button>
-            ${hasBuilderSections ? `<button class="btn btn-outline" data-action="import-builder-sections">Use current builder sections</button>` : ''}
+            ${hasBuilderSections ? `<button class="btn btn-outline" data-action="import-builder-sections">Use current Newsletter sections</button>` : ''}
           </div>
         </div>
         ` : `
         <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 16px">
           <div style="font-size:12px;color:var(--text-3)">${userSections.length} section${userSections.length === 1 ? '' : 's'} · new newsletters start here</div>
           <div style="display:flex;gap:6px">
-            ${hasBuilderSections ? `<button class="btn btn-outline btn-sm" data-action="import-builder-sections">Sync from builder</button>` : ''}
+            ${hasBuilderSections ? `<button class="btn btn-outline btn-sm" data-action="import-builder-sections">Sync from Newsletter</button>` : ''}
             <button class="btn btn-ghost btn-sm" data-action="reset-section-layout" style="color:var(--red)">Reset</button>
           </div>
         </div>
@@ -2268,7 +2278,7 @@ function renderSettingsPage() {
       <!-- ── DEFAULT TONE ── -->
       <div class="settings-section">
         <div class="settings-section-title">Default Tone</div>
-        <div class="settings-section-sub">Applied to new newsletters. Can be changed per session in the builder.</div>
+        <div class="settings-section-sub">Applied to new newsletters. Can be changed per session in Newsletter.</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
           ${tones.map(t => `
           <button class="btn ${state.tone === t.id ? 'btn-primary' : 'btn-outline'}" data-action="select-tone" data-tone="${t.id}">
@@ -2343,7 +2353,10 @@ function renderAppNav(active) {
       <span class="icon">⊞</span> Dashboard
     </div>
     <div class="nav-item ${active === 'builder' ? 'active' : ''}" data-action="navigate" data-view="builder">
-      <span class="icon">✎</span> Builder
+      <span class="icon">✎</span> Newsletter
+    </div>
+    <div class="nav-item ${active === 'articles' ? 'active' : ''}" data-action="navigate" data-view="articles">
+      <span class="icon">📄</span> Articles
     </div>
     <div class="nav-item ${active === 'sources' ? 'active' : ''}" data-action="navigate" data-view="sources">
       <span class="icon">📡</span> Sources
@@ -5316,9 +5329,24 @@ async function callAIStream(action, content, options = {}, onDelta, onProgress) 
     if (data.result && onDelta) onDelta(data.result);
     return data.result || '';
   }
+  let full = '';
+  await readSSEStream(res, {
+    onData: (data) => {
+      if (data.delta) { full += data.delta; onDelta && onDelta(full); }
+      else if (data.clean) { full = data.clean; onDelta && onDelta(full); } // server-side voice-sanitized final text
+      else if (data.progress) { onProgress && onProgress(data.progress); }  // research-phase status
+    },
+  });
+  return full;
+}
+
+// Frame parser shared by every streaming endpoint (/api/ai, /api/articles/generate).
+// One implementation means one place where a partial-frame bug can exist.
+// `error` frames are thrown so callers handle failures in their catch block.
+async function readSSEStream(res, { onData } = {}) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buf = '', full = '';
+  let buf = '';
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -5329,13 +5357,10 @@ async function callAIStream(action, content, options = {}, onDelta, onProgress) 
       const line = frame.trim();
       if (!line.startsWith('data:')) continue;
       let data; try { data = JSON.parse(line.slice(5).trim()); } catch { continue; }
-      if (data.delta) { full += data.delta; onDelta && onDelta(full); }
-      else if (data.clean) { full = data.clean; onDelta && onDelta(full); } // server-side voice-sanitized final text
-      else if (data.progress) { onProgress && onProgress(data.progress); }  // research-phase status
-      else if (data.error) { throw new Error(data.error); }
+      if (data.error) throw new Error(data.error);
+      onData && onData(data);
     }
   }
-  return full;
 }
 
 // ── DESIGN PANEL ──────────────────────────────────────────────────────────────
