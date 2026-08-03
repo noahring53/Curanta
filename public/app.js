@@ -447,6 +447,14 @@ function handleClick(e) {
     case 'subjects-copy':     copySubjectLine(Number(d.idx)); break;
     case 'subjects-toggle-settings': state.subjectStudio.settingsOpen = !state.subjectStudio.settingsOpen; refreshSubjectsPanel(); break;
     case 'subjects-save-settings': scheduleSettingsSave(); toast('Subject settings saved', 'success'); break;
+    // The textarea already autosaves on input; Save flushes the debounce so the
+    // server has it before the user walks over to the Articles page to generate.
+    case 'save-ai-settings':
+      cacheSettingsLocally();
+      (sb && state.user ? saveUserSettings() : Promise.resolve())
+        .then(() => toast('AI settings saved', 'success'))
+        .catch(() => toast('Saved on this device', 'warn'));
+      break;
     case 'generate-preview':  generatePreviewText(); break;
     case 'generate-brand-voice': generateBrandVoice(); break;
     case 'toggle-theme':    toggleTheme(); break;
@@ -498,6 +506,7 @@ function handleInput(e) {
   else if (t.matches('#color-picker')) { state.design.primaryColor = t.value; scheduleSettingsSave(); applyDesignSettings(); }
   else if (t.matches('#brand-voice-samples')) state.brandVoiceSamples = t.value;
   else if (t.matches('#audience-avatar')) { state.audienceAvatar = t.value; scheduleSettingsSave(); }
+  else if (t.matches('#article-master-prompt')) { articleSettings().masterPrompt = t.value; scheduleSettingsSave(); }
   else if (t.matches('#subject-evergreen')) { subjectSettings().evergreen = t.value; scheduleSettingsSave(); }
   else if (t.matches('#subject-count')) { subjectSettings().count = Math.min(Math.max(parseInt(t.value) || 8, 1), 20); scheduleSettingsSave(); }
   else if (t.matches('.default-prompt-input')) {
@@ -2131,6 +2140,7 @@ function renderSettingsPage() {
 
     <div class="settings-tabs">
       <button class="settings-tab ${tab === 'content' ? 'active' : ''}" data-action="settings-tab" data-tab="content">Content</button>
+      <button class="settings-tab ${tab === 'ai' ? 'active' : ''}" data-action="settings-tab" data-tab="ai">AI Settings</button>
       <button class="settings-tab ${tab === 'appearance' ? 'active' : ''}" data-action="settings-tab" data-tab="appearance">Appearance</button>
       <button class="settings-tab ${tab === 'api' ? 'active' : ''}" data-action="settings-tab" data-tab="api">API</button>
     </div>
@@ -2276,7 +2286,51 @@ function renderSettingsPage() {
       </div>`;
       })()}
 
-      ` : tab === 'appearance' ? `
+      ` : tab === 'ai' ? (() => {
+        const a = articleSettings();
+        return `
+
+      <!-- ── MASTER ARTICLE PROMPT ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">Master Article Prompt</div>
+        <div class="settings-section-sub">The standing instruction used for <strong>every</strong> article you draft${canUsePubs() ? ' in <strong>' + escHtml(currentPublicationName()) + '</strong>' : ''} — voice, structure, length, rules. Set it once here; the Articles page then only asks for the angle. Saves automatically as you type.</div>
+        <textarea id="article-master-prompt" class="input" rows="16"
+          style="width:100%;resize:vertical;font-size:13px;line-height:1.7;font-family:inherit;margin-top:14px"
+          placeholder="e.g. Write in our house voice: direct, concrete, no hype. Headline: specific and factual. Lead with the news. 700–900 words. Attribute every non-obvious claim to the reporting outlet. Include the strongest verbatim quote. Close on what happens next, never a summary."
+        >${escHtml(a.masterPrompt)}</textarea>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+          <span class="text-xs text-dim">${(a.masterPrompt || '').trim() ? '✓ Applied to every generation automatically' : 'Empty — articles use built-in house defaults until you set this'}</span>
+          <button class="btn btn-primary btn-sm" data-action="save-ai-settings">Save</button>
+        </div>
+      </div>
+
+      <!-- ── FUTURE AI SETTINGS (placeholders) ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">Generation Defaults <span class="badge badge-default" style="vertical-align:middle;margin-left:6px">Coming soon</span></div>
+        <div class="settings-section-sub">These will fine-tune every article generation. Not wired up yet — the Master Article Prompt above is the only setting in effect today.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
+          <div class="design-control">
+            <label class="design-label" for="ai-model">Preferred AI Model</label>
+            <select id="ai-model" class="input input-sm" disabled title="Configured on the server for now (ANTHROPIC_MODEL_ARTICLE)">
+              <option>Server default (recommended)</option>
+            </select>
+          </div>
+          <div class="design-control">
+            <label class="design-label" for="ai-maxlen">Max Article Length</label>
+            <select id="ai-maxlen" class="input input-sm" disabled>
+              <option>Follow the prompt</option>
+            </select>
+          </div>
+          <div class="design-control" style="grid-column:1/-1">
+            <label class="design-label" for="ai-tone">Default Tone</label>
+            <select id="ai-tone" class="input input-sm" disabled>
+              ${tones.map(t => `<option>${t.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+      `;
+      })() : tab === 'appearance' ? `
 
       <!-- ── DEFAULT TONE ── -->
       <div class="settings-section">
@@ -5101,6 +5155,19 @@ function subjectSettings() {
     state.defaultPrompts._subjects = { evergreen: DEFAULT_SUBJECT_EVERGREEN, count: 8 };
   }
   return state.defaultPrompts._subjects;
+}
+
+// The Master Article Prompt (and future AI-generation defaults) live under the
+// reserved _article key of the same per-publication default_prompts blob the
+// server reads on each generation. Configure once here; the Articles page then
+// only needs the angle. Model/maxLength/tone are placeholders for now.
+function articleSettings() {
+  if (!state.defaultPrompts._article || typeof state.defaultPrompts._article === 'string') {
+    // Tolerate the bare-string shape the server also accepts, and seed defaults.
+    const seed = typeof state.defaultPrompts._article === 'string' ? state.defaultPrompts._article : '';
+    state.defaultPrompts._article = { masterPrompt: seed, model: '', maxLength: '', tone: '' };
+  }
+  return state.defaultPrompts._article;
 }
 
 function renderSubjectsPanel() {

@@ -2042,18 +2042,27 @@ Examples:
 // a second copy of any of them.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Master prompts are read here, server-side, by ID. That is the whole point of
-// the prompt library: a long house-style prompt is stored once and never
-// travels over the wire on each generation. RLS still applies — the read runs
-// with the caller's own token, so a guessed ID returns nothing.
-async function loadArticlePrompt(promptId, userId, authToken) {
-  if (!SUPABASE_URL || !authToken) return null;
-  if (!UUID_RE.test(String(promptId || '')) || !UUID_RE.test(String(userId || ''))) return null;
+// The Master Article Prompt is configured once in Settings → AI Settings and
+// read here, server-side, on each generation. That is the whole point: a long
+// house-style prompt is stored once and never travels over the wire per request
+// — the Articles page sends only the angle. It rides the same default_prompts
+// JSON blob every other setting uses (under the reserved _article key), scoped
+// to the active publication's row or the user's Default. RLS still applies: the
+// read runs with the caller's own token.
+async function loadArticleMaster(userId, authToken, publicationId) {
+  if (!SUPABASE_URL || !authToken || !UUID_RE.test(String(userId || ''))) return '';
   try {
-    return await sbGet('article_prompts', `id=eq.${promptId}&user_id=eq.${userId}`, authToken);
+    const row = (publicationId && UUID_RE.test(String(publicationId)))
+      ? await sbGet('publications', `id=eq.${publicationId}&user_id=eq.${userId}`, authToken)
+      : await sbGet('user_settings', `user_id=eq.${userId}`, authToken);
+    const article = row?.default_prompts?._article;
+    // Tolerate both shapes: a bare string, or the { masterPrompt, … } object the
+    // settings UI writes once the other AI-settings fields come online.
+    if (typeof article === 'string') return article;
+    return article?.masterPrompt || '';
   } catch (e) {
-    console.error('[articles] prompt load failed:', e.message);
-    return null;
+    console.error('[articles] master prompt load failed:', e.message);
+    return '';
   }
 }
 
@@ -2101,7 +2110,7 @@ registerArticleRoutes(app, {
   generate: generateArticleText,
   hasAI: Boolean(anthropic),
   checkUsage: checkAndMeterUsage,
-  loadPrompt: loadArticlePrompt,
+  loadMaster: loadArticleMaster,
   extractLimiter: ingestLimiter,
   generateLimiter: aiLimiter,
 });

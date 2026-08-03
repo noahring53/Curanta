@@ -22,7 +22,9 @@
    escHtml, timeAgo, toast, showConfirm, writeRichClipboard and readSSEStream.
 
    Cost discipline lives on the server (lib/articles.mjs). The one rule this
-   file must honour: never send prompt text when a prompt ID will do.
+   file must honour: never send the master prompt over the wire — it is configured
+   once in Settings → AI Settings and the server reads it per generation. This
+   page sends only the angle (plus an optional one-off override).
 ════════════════════════════════════════════════════════════════════════════ */
 
 const art = {
@@ -33,12 +35,15 @@ const art = {
   source: null,            // { title, publication, author, publishedAt, url, wordCount, trimmed, cached, preview }
   angle: '',
   notes: '',
-  promptId: '',
+  // The master prompt lives in Settings → AI Settings and is applied by the
+  // server automatically. promptOverride is the optional Advanced-Options escape
+  // hatch: non-empty replaces the master prompt for this one generation only.
+  promptOverride: '',
+  advancedOpen: false,
   generating: false,
   genStatus: '',
   draft: null,             // { id, title, bodyHtml, status, sourceUrl, … }
   drafts: [],
-  prompts: [],
   recentUrls: [],          // last few pasted URLs — re-picking one is a cache hit
   loaded: false,
   dbReady: null,           // null = unknown, true = tables exist, false = localStorage
@@ -48,7 +53,6 @@ const art = {
 };
 
 // ── Storage keys (localStorage fallback when the tables aren't migrated yet) ──
-const artPromptsKey = () => `lwai_article_prompts_${state.currentPublicationId || 'default'}`;
 const artDraftsKey  = () => `lwai_article_drafts_${state.currentPublicationId || 'default'}`;
 const artRecentKey  = () => `lwai_article_recent_${state.currentPublicationId || 'default'}`;
 
@@ -62,104 +66,17 @@ function artWriteLocal(key, value) {
 
 const artHasDB = () => Boolean(sb && state.user && art.dbReady !== false);
 
-// One probe decides which storage backend the whole feature uses. A missing
-// table means the migration hasn't been run — the feature still works, locally,
-// and says so once, rather than erroring on every keystroke.
+// One probe decides which storage backend the drafts use. A missing table means
+// the migration hasn't been run — drafts still work, locally, and the page says
+// so once, rather than erroring on every keystroke. (The master prompt itself
+// rides user_settings.default_prompts, which always exists once you're signed in.)
 async function artDetectDB() {
   if (art.dbReady !== null) return art.dbReady;
   if (!sb || !state.user) { art.dbReady = false; return false; }
-  const { error } = await sb.from('article_prompts').select('id').limit(1);
+  const { error } = await sb.from('articles').select('id').limit(1);
   art.dbReady = !error;
   if (error) console.warn('[articles] falling back to local storage:', error.message);
   return art.dbReady;
-}
-
-// ── PROMPT LIBRARY (data) ─────────────────────────────────────────────────────
-const STARTER_PROMPT = `Write in the publication's house voice: direct, concrete, and free of hype.
-
-Structure:
-- Headline: specific and factual. No clickbait.
-- Lead paragraph: the news itself — what happened, who it affects, why now.
-- Body: 5–9 short paragraphs. Lead each with a fact, not a transition.
-- Include the strongest verbatim quote from the source, attributed by name and title.
-- Close on what happens next or what remains unresolved. Never close on a summary.
-
-Rules:
-- 700–900 words.
-- Attribute every claim that isn't self-evident to the reporting outlet.
-- No "in today's fast-paced world", no rhetorical questions, no em-dash pile-ups.`;
-
-async function artLoadPrompts() {
-  if (await artDetectDB()) {
-    const pubId = state.currentPublicationId || null;
-    let q = sb.from('article_prompts').select('*').eq('user_id', state.user.id).order('created_at');
-    q = pubId ? q.eq('publication_id', pubId) : q.is('publication_id', null);
-    const { data, error } = await q;
-    if (!error) {
-      return (data || []).map(r => ({
-        id: r.id, name: r.name, description: r.description || '',
-        prompt: r.prompt || '', isDefault: !!r.is_default, mode: r.mode || 'news',
-        updatedAt: r.updated_at || r.created_at,
-      }));
-    }
-    console.error('[articles] prompt load error:', error.message);
-  }
-  return artReadLocal(artPromptsKey());
-}
-
-async function artSavePrompt(p) {
-  p.updatedAt = new Date().toISOString();
-  if (await artDetectDB()) {
-    const row = {
-      user_id: state.user.id,
-      name: p.name, description: p.description, prompt: p.prompt,
-      is_default: !!p.isDefault, mode: p.mode || 'news',
-      publication_id: state.currentPublicationId || null,
-    };
-    if (p.id) {
-      const { error } = await sb.from('article_prompts').update(row).eq('id', p.id).eq('user_id', state.user.id);
-      if (error) { toast('Could not save prompt: ' + error.message, 'error'); return null; }
-      return p.id;
-    }
-    const { data, error } = await sb.from('article_prompts').insert(row).select('id').single();
-    if (error) { toast('Could not save prompt: ' + error.message, 'error'); return null; }
-    return data.id;
-  }
-  const list = artReadLocal(artPromptsKey());
-  if (p.id) {
-    const i = list.findIndex(x => x.id === p.id);
-    if (i >= 0) list[i] = { ...list[i], ...p };
-  } else {
-    p.id = 'local_' + uid();
-    list.push(p);
-  }
-  artWriteLocal(artPromptsKey(), list);
-  return p.id;
-}
-
-async function artDeletePromptRow(id) {
-  if (await artDetectDB()) {
-    const { error } = await sb.from('article_prompts').delete().eq('id', id).eq('user_id', state.user.id);
-    if (error) toast('Could not delete prompt: ' + error.message, 'error');
-    return;
-  }
-  artWriteLocal(artPromptsKey(), artReadLocal(artPromptsKey()).filter(p => p.id !== id));
-}
-
-// Exactly one default. Enforced here rather than in the DB because the rule is
-// per-publication and a partial unique index would fight the localStorage path.
-async function artApplyDefault(id) {
-  art.prompts = art.prompts.map(p => ({ ...p, isDefault: p.id === id }));
-  if (await artDetectDB()) {
-    const pubId = state.currentPublicationId || null;
-    let clear = sb.from('article_prompts').update({ is_default: false }).eq('user_id', state.user.id);
-    clear = pubId ? clear.eq('publication_id', pubId) : clear.is('publication_id', null);
-    await clear;
-    await sb.from('article_prompts').update({ is_default: true }).eq('id', id).eq('user_id', state.user.id);
-  } else {
-    artWriteLocal(artPromptsKey(), art.prompts);
-  }
-  art.promptId = id;
 }
 
 // ── DRAFTS (data) ─────────────────────────────────────────────────────────────
@@ -292,10 +209,7 @@ async function articlesOnNavigate() {
   if (!art.loaded) {
     art.loaded = true;
     art.recentUrls = artReadLocal(artRecentKey());
-    const [prompts, drafts] = await Promise.all([artLoadPrompts(), artLoadDrafts()]);
-    art.prompts = prompts;
-    art.drafts = drafts;
-    if (!art.promptId) art.promptId = (prompts.find(p => p.isDefault) || prompts[0] || {}).id || '';
+    art.drafts = await artLoadDrafts();
   }
   // Feeds are shared with the builder — loaded the same way it loads them.
   if (sb && state.user && !state.sources.length) state.sources = await loadSourcesFromDB();
@@ -476,21 +390,19 @@ function renderArticleRow(a) {
 }
 
 // ── DIRECTION ─────────────────────────────────────────────────────────────────
-// A builder section, header and all: the compact controls live in the header
-// (exactly where every builder section keeps its prompt picker and Generate
-// button), leaving the body for the two fields that matter.
+// A builder section, header and all: Generate lives in the header (exactly where
+// every builder section keeps its Generate button), leaving the body for the one
+// field that matters — the angle. The master prompt is set once in Settings and
+// applied by the server automatically; it is deliberately absent from this page.
 function renderArticleDirectionSection() {
   const ready = Boolean(art.source && art.angle.trim()) && !art.generating;
+  const overriding = art.promptOverride.trim().length > 0;
   return `
 <div class="editor-section">
   <div class="section-header">
     <span class="section-label">Direction</span>
     <div class="section-prompt-wrap">
-      <select class="input input-sm section-type-picker" id="art-prompt-select" style="max-width:200px" title="Master prompt — stored server-side; only its ID is sent">
-        <option value="" ${!art.promptId ? 'selected' : ''}>— House defaults —</option>
-        ${art.prompts.map(p => `<option value="${escHtml(p.id)}" ${p.id === art.promptId ? 'selected' : ''}>${escHtml(p.name)}${p.isDefault ? ' ★' : ''}</option>`).join('')}
-        <option value="__manage">Manage Prompt Library…</option>
-      </select>
+      <span style="flex:1"></span>
       <button class="btn btn-sm btn-primary" data-action="art-generate" ${ready ? '' : 'disabled'}
         title="${!art.source ? 'Pick a source first' : !art.angle.trim() ? 'An angle is required' : 'Draft the article'}">
         ${art.generating ? '<span class="spinner"></span> Generating' : '✦ Generate Article'}
@@ -507,6 +419,28 @@ function renderArticleDirectionSection() {
       <label class="design-label" for="art-notes">Notes <span>optional</span></label>
       <textarea id="art-notes" class="input input-sm" rows="2" style="margin-top:5px;min-height:0"
         placeholder="Length, who to quote, what to leave out.">${escHtml(art.notes)}</textarea>
+    </div>
+
+    <!-- Advanced: everyday flow never opens this. The master prompt from Settings
+         is used unless an override is typed here, for this one generation only. -->
+    <div style="border-top:1px solid var(--border);padding-top:10px">
+      <button class="btn btn-ghost btn-sm btn-icon-sm" data-action="art-toggle-advanced"
+        style="padding-left:0;color:var(--text-3);font-size:11.5px">
+        ${art.advancedOpen ? '▾' : '▸'} Advanced options${overriding && !art.advancedOpen ? ' <span class="badge badge-accent" style="margin-left:4px">override on</span>' : ''}
+      </button>
+      ${art.advancedOpen ? `
+      <div style="margin-top:8px">
+        <label class="design-label" for="art-override">Prompt override <span>optional</span></label>
+        <textarea id="art-override" class="input input-sm" rows="5" style="margin-top:5px;font-size:12px;line-height:1.6"
+          placeholder="Leave blank to use your Master Article Prompt from Settings. Type here to replace it for this one article only.">${escHtml(art.promptOverride)}</textarea>
+        <div class="text-xs text-dim" style="margin-top:5px;display:flex;align-items:center;gap:6px">
+          ${overriding
+            ? '⚠️ Overriding your master prompt for this generation.'
+            : 'Using your <strong>Master Article Prompt</strong> from Settings → AI Settings.'}
+          <span style="flex:1"></span>
+          <button class="nl-action-btn" data-action="art-edit-master" title="Edit the master prompt in Settings">Edit master →</button>
+        </div>
+      </div>` : ''}
     </div>
   </div>
 </div>`;
@@ -712,79 +646,6 @@ function showArticleDraftsModal() {
     </div>`);
 }
 
-function showArticlePromptsModal() {
-  const q = (art.promptSearch || '').trim().toLowerCase();
-  const rows = art.prompts.filter(p => !q
-    || (p.name || '').toLowerCase().includes(q)
-    || (p.description || '').toLowerCase().includes(q));
-
-  artModal('Prompt Library', 'Stored server-side — generation sends the ID, never the text.', `
-    <div class="source-add-form" style="padding:0 0 12px;border:none">
-      <input class="input input-sm" id="art-prompt-search" value="${escHtml(art.promptSearch || '')}" placeholder="🔍 Search prompts…" autocomplete="off">
-    </div>
-    <div class="feed-health-list" style="max-height:52vh;overflow-y:auto">
-      ${!rows.length ? `<div class="source-empty"><div class="source-empty-icon">📐</div>
-        <strong style="color:var(--text-2);font-size:13px">${q ? 'No matches' : 'No prompts yet'}</strong>
-        <p style="margin-top:6px">A master prompt is your house style — written once, applied to every article.</p></div>`
-      : rows.map(p => `
-      <div class="feed-health-item">
-        <span class="dot ${p.isDefault ? 'dot-green' : 'dot-dim'}" title="${p.isDefault ? 'Default prompt' : ''}"></span>
-        <div style="flex:1;min-width:0">
-          <div class="feed-health-name" style="display:flex;align-items:center;gap:8px">
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.name)}</span>
-            ${p.isDefault ? '<span class="badge badge-accent">Default</span>' : ''}
-          </div>
-          <div class="text-xs text-dim" style="margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            ${escHtml(p.description || (p.prompt || '').slice(0, 90))}
-          </div>
-        </div>
-        <span class="text-xs text-dim" style="flex-shrink:0">${escHtml(timeAgo(p.updatedAt) || '')}</span>
-        <div style="display:flex;gap:4px;flex-shrink:0">
-          <button class="nl-action-btn" data-action="art-edit-prompt" data-id="${escHtml(p.id)}">Edit</button>
-          <button class="nl-action-btn" data-action="art-duplicate-prompt" data-id="${escHtml(p.id)}">Copy</button>
-          ${p.isDefault ? '' : `<button class="nl-action-btn" data-action="art-set-default-prompt" data-id="${escHtml(p.id)}">Default</button>`}
-          <button class="nl-action-btn danger" data-action="art-delete-prompt" data-id="${escHtml(p.id)}">Delete</button>
-        </div>
-      </div>`).join('')}
-    </div>`,
-    `<div style="display:flex;gap:6px;flex-shrink:0">
-       ${art.prompts.length ? '' : '<button class="btn btn-sm btn-outline" data-action="art-new-prompt" data-starter="1">Use a template</button>'}
-       <button class="btn btn-sm btn-primary" data-action="art-new-prompt">＋ New Prompt</button>
-     </div>`);
-}
-
-function showArticlePromptEditor(prompt = null, useStarter = false) {
-  const p = prompt || { id: '', name: '', description: '', prompt: useStarter ? STARTER_PROMPT : '', isDefault: !art.prompts.length };
-  artModal(p.id ? 'Edit prompt' : 'New master prompt', '', `
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div>
-        <label class="design-label" for="art-p-name">Name</label>
-        <input class="input input-sm" id="art-p-name" style="margin-top:5px" value="${escHtml(p.name)}" placeholder="House news style">
-      </div>
-      <div>
-        <label class="design-label" for="art-p-desc">Description <span>optional</span></label>
-        <input class="input input-sm" id="art-p-desc" style="margin-top:5px" value="${escHtml(p.description)}" placeholder="When to use this one">
-      </div>
-      <div>
-        <label class="design-label" for="art-p-body">Prompt</label>
-        <textarea class="input" id="art-p-body" rows="12" style="margin-top:5px;font-size:12.5px;line-height:1.6"
-          placeholder="Voice, structure, length, rules…">${escHtml(p.prompt)}</textarea>
-      </div>
-      <label class="toggle-row" style="cursor:pointer">
-        <span class="design-label" style="margin:0">Use as default for new articles</span>
-        <span class="toggle-switch">
-          <input type="checkbox" id="art-p-default" ${p.isDefault ? 'checked' : ''}>
-          <span class="toggle-track"></span><span class="toggle-thumb"></span>
-        </span>
-      </label>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="btn btn-outline" data-action="art-close-modal">Cancel</button>
-        <button class="btn btn-primary" data-action="art-save-prompt" data-id="${escHtml(p.id)}">Save prompt</button>
-      </div>
-    </div>`);
-  setTimeout(() => document.getElementById('art-p-name')?.focus(), 40);
-}
-
 // ── ACTIONS ───────────────────────────────────────────────────────────────────
 async function articlesHandleAction(action, d) {
   switch (action) {
@@ -805,7 +666,16 @@ async function articlesHandleAction(action, d) {
 
     case 'art-new':
       art.source = null; art.angle = ''; art.notes = ''; art.draft = null; art.urlInput = '';
+      art.promptOverride = ''; art.advancedOpen = false;
       render(); return true;
+
+    case 'art-toggle-advanced':
+      art.advancedOpen = !art.advancedOpen; render();
+      if (art.advancedOpen) document.getElementById('art-override')?.focus();
+      return true;
+
+    case 'art-edit-master':
+      state.settingsTab = 'ai'; navigate('settings'); return true;
 
     case 'art-generate':
       await artGenerate(); return true;
@@ -845,7 +715,6 @@ async function articlesHandleAction(action, d) {
     }
 
     case 'art-open-drafts':  showArticleDraftsModal(); return true;
-    case 'art-open-prompts': showArticlePromptsModal(); return true;
     case 'art-close-modal':  closeModal(); return true;
 
     case 'art-open-draft': {
@@ -854,7 +723,6 @@ async function articlesHandleAction(action, d) {
       art.draft = { ...draft };
       art.angle = draft.angle || art.angle;
       art.notes = draft.notes || art.notes;
-      if (draft.promptId) art.promptId = draft.promptId;
       // Reopening a draft re-selects its source, so Regenerate works instantly
       // and the reader can see what it was written from. Cached: no refetch.
       closeModal();
@@ -890,67 +758,6 @@ async function articlesHandleAction(action, d) {
       toast('Article deleted', 'success');
       return true;
     }
-
-    case 'art-new-prompt':
-      showArticlePromptEditor(null, d.starter === '1'); return true;
-
-    case 'art-edit-prompt':
-      showArticlePromptEditor(art.prompts.find(p => p.id === d.id)); return true;
-
-    case 'art-save-prompt': {
-      const name = document.getElementById('art-p-name').value.trim();
-      const body = document.getElementById('art-p-body').value;
-      if (!name) { toast('Give the prompt a name', 'warn'); return true; }
-      if (!body.trim()) { toast('The prompt body is empty', 'warn'); return true; }
-      const p = {
-        id: d.id || '',
-        name,
-        description: document.getElementById('art-p-desc').value.trim(),
-        prompt: body,
-        isDefault: document.getElementById('art-p-default').checked,
-        mode: 'news',
-      };
-      const id = await artSavePrompt(p);
-      if (!id) return true;
-      p.id = id;
-      const i = art.prompts.findIndex(x => x.id === id);
-      if (i >= 0) art.prompts[i] = p; else art.prompts.push(p);
-      if (p.isDefault) await artApplyDefault(id);
-      if (!art.promptId) art.promptId = id;
-      render();
-      showArticlePromptsModal();
-      toast('Prompt saved', 'success');
-      return true;
-    }
-
-    case 'art-duplicate-prompt': {
-      const src = art.prompts.find(p => p.id === d.id);
-      if (!src) return true;
-      const copy = { ...src, id: '', name: `${src.name} (copy)`, isDefault: false };
-      const id = await artSavePrompt(copy);
-      if (id) { copy.id = id; art.prompts.push(copy); render(); showArticlePromptsModal(); toast('Prompt duplicated', 'success'); }
-      return true;
-    }
-
-    case 'art-set-default-prompt':
-      await artApplyDefault(d.id); render(); showArticlePromptsModal(); toast('Default prompt updated', 'success'); return true;
-
-    case 'art-delete-prompt': {
-      const target = art.prompts.find(p => p.id === d.id);
-      const ok = await showConfirm({
-        title: 'Delete this prompt?',
-        message: `"${target?.name || 'Untitled'}" will be removed from your library. Articles already written with it are unaffected.`,
-        danger: true,
-      });
-      if (!ok) { showArticlePromptsModal(); return true; }
-      await artDeletePromptRow(d.id);
-      art.prompts = art.prompts.filter(p => p.id !== d.id);
-      if (art.promptId === d.id) art.promptId = (art.prompts.find(p => p.isDefault) || art.prompts[0] || {}).id || '';
-      render();
-      showArticlePromptsModal();
-      toast('Prompt deleted', 'success');
-      return true;
-    }
   }
   return false;
 }
@@ -962,6 +769,8 @@ function articlesHandleInput(t) {
       art.angle = t.value; artSyncGenerateButton(); return true;
     case 'art-notes':
       art.notes = t.value; return true;
+    case 'art-override':
+      art.promptOverride = t.value; return true;
     case 'art-url-input':
       art.urlInput = t.value; return true;
     case 'art-search':
@@ -969,13 +778,6 @@ function articlesHandleInput(t) {
     case 'art-draft-search':
       art.draftSearch = t.value; showArticleDraftsModal();
       document.getElementById('art-draft-search')?.focus(); return true;
-    case 'art-prompt-search':
-      art.promptSearch = t.value; showArticlePromptsModal();
-      document.getElementById('art-prompt-search')?.focus(); return true;
-    case 'art-prompt-select':
-      if (t.value === '__manage') { t.value = art.promptId || ''; showArticlePromptsModal(); }
-      else art.promptId = t.value;
-      return true;
     case 'art-headline':
       if (art.draft) { art.draft.title = t.value; artScheduleSave(); }
       return true;
@@ -1049,15 +851,20 @@ async function artGenerate() {
     url: art.source.url,
     angle: art.angle,
     notes: art.notes,
-    promptId: art.promptId || '',
+    // The master prompt is NOT sent — the server reads it from this user's
+    // settings. Only a one-off override (Advanced Options) travels per request.
+    promptOverride: art.promptOverride.trim(),
+    publicationId: state.currentPublicationId || '',
     mode: 'news',
     stream: true,
     userId: state.user?.id || '',
     authToken: await getAuthToken(),
   };
-  // Only installs without a prompt store send prompt text over the wire.
-  if (!artHasDB() && art.promptId) {
-    body.promptText = (art.prompts.find(p => p.id === art.promptId) || {}).prompt || '';
+  // No-DB installs (mock/local mode) have no settings row for the server to read,
+  // so the client mirrors the locally-saved master prompt as a fallback. This is
+  // the only path on which the master prompt text leaves the browser.
+  if (!artHasDB() && !body.promptOverride) {
+    body.masterPromptText = (articleSettings().masterPrompt || '').trim();
   }
 
   let markdown = '';
@@ -1138,7 +945,7 @@ function artNewDraft(title, mdBody) {
     sourceUrl: art.source.url,
     sourceTitle: art.source.title,
     sourcePublication: art.source.publication,
-    promptId: art.promptId,
+    promptId: '',   // prompts are no longer per-draft; kept for the DB column's sake
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
