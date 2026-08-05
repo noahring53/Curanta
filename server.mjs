@@ -14,7 +14,8 @@ import {
   reviewDraft,
 } from './lib/research.mjs';
 import { extractStructuredArticle } from './lib/extract.mjs';
-import { registerArticleRoutes } from './lib/articles.mjs';
+import { registerArticleRoutes, withRetry, isRetryableStatus } from './lib/articles.mjs';
+import { registerAutomationRoutes } from './lib/automation/run.mjs';
 
 // How much scraped article text we keep. The research pipeline's whole premise
 // is that the model reads the ARTICLE, not a fragment of it — the old 6,500-char
@@ -67,6 +68,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Railway (and every PaaS) puts a reverse proxy in front of us, so req.ip is the
+// proxy's socket address unless we trust the forwarding header. Without this,
+// express-rate-limit keys EVERY user on the same proxy IP — collapsing all the
+// per-IP limiters below into one global bucket shared by the entire user base,
+// which is the dominant cause of spurious "rate limit" errors in production.
+// One hop (Railway's proxy); override with TRUST_PROXY if the topology differs.
+// Treat unset OR empty as the default 1 (an empty env var would otherwise become
+// Number('')===0 and silently disable proxy trust — back to one global bucket).
+app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
+
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -92,6 +103,25 @@ const ingestLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 20,
   message: { error: 'Too many feed requests. Please wait a few minutes.' },
+});
+
+// Article drafting is inherently high-volume — a writer may produce many pieces
+// per session — so it gets its OWN buckets instead of cannibalising the
+// newsletter's. Generation is metered by subscription quota anyway (see
+// checkAndMeterUsage), so this limiter only guards against abuse/runaway loops,
+// hence the higher ceiling than the newsletter's occasional-send limiter.
+const articleGenerateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { error: 'article_rate_limit', message: "You've generated a lot of articles in a short time. Please wait a couple of minutes." },
+});
+// Extract does no model work and is cache-backed, so it can be generous — but
+// still separate from the RSS feed bucket so browsing sources never starves
+// feed loading (or vice-versa).
+const articleExtractLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  message: { error: 'article_rate_limit', message: 'Fetching sources too quickly. Please wait a moment.' },
 });
 
 const stripeLimiter = rateLimit({
@@ -158,17 +188,25 @@ const REVIEW_ENABLED = process.env.RESEARCH_REVIEW !== 'off';
 // defaults to the strongest configured model rather than the research model.
 const MODEL_REVIEW = process.env.ANTHROPIC_MODEL_REVIEW || MODEL_LEAD;
 
-// Wraps anthropic.messages.create with an automatic model fallback: if the
-// requested model isn't available on this API key, retry once on the proven
-// fallback instead of failing the user's generation.
+// Wraps anthropic.messages.create with two safety nets:
+//  1. Automatic model fallback: if the requested model isn't available on this
+//     API key, retry once on the proven fallback instead of failing.
+//  2. Bounded exponential backoff (with jitter, honoring Retry-After) on genuine
+//     transient failures — a real provider 429, a 529 overload, or a 5xx. Auth
+//     and validation errors are permanent and rethrow immediately, never retried.
 async function createWithFallback(params) {
+  const attempt = (p) => withRetry(() => anthropic.messages.create(p), {
+    attempts: 3,
+    onRetry: ({ attempt, status, delay }) =>
+      console.warn(`[anthropic] transient ${status} — retry ${attempt} in ${delay}ms`),
+  });
   try {
-    return await anthropic.messages.create(params);
+    return await attempt(params);
   } catch (e) {
     const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
     if (notFound && params.model !== FALLBACK_MODEL) {
       console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
-      return anthropic.messages.create({ ...params, model: FALLBACK_MODEL });
+      return attempt({ ...params, model: FALLBACK_MODEL });
     }
     throw e;
   }
@@ -2091,11 +2129,19 @@ async function generateArticleText({ system, user, maxTokens, temperature, onDel
     return assembled;
   };
 
+  // Transient-failure backoff, but ONLY while nothing has streamed yet: once the
+  // reader is watching tokens, a restart would duplicate them, so we refuse the
+  // retry and let the error surface as an SSE error frame instead.
   try {
-    return await runStream(params);
+    return await withRetry(() => runStream(params), {
+      attempts: 3,
+      shouldRetry: (e) => streamed === 0 && isRetryableStatus(e?.status),
+      onRetry: ({ attempt, status, delay }) =>
+        console.warn(`[anthropic] transient ${status} on article stream — retry ${attempt} in ${delay}ms`),
+    });
   } catch (e) {
     const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
-    // Only retry when nothing has been shown yet — a mid-stream restart would
+    // Only fall back when nothing has been shown yet — a mid-stream restart would
     // duplicate text the reader is already watching.
     if (notFound && streamed === 0 && params.model !== FALLBACK_MODEL) {
       console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
@@ -2111,8 +2157,20 @@ registerArticleRoutes(app, {
   hasAI: Boolean(anthropic),
   checkUsage: checkAndMeterUsage,
   loadMaster: loadArticleMaster,
-  extractLimiter: ingestLimiter,
-  generateLimiter: aiLimiter,
+  extractLimiter: articleExtractLimiter,
+  generateLimiter: articleGenerateLimiter,
+});
+
+// ── Automation: ingest → auto-draft → email-digest (manual trigger) ──────────
+// Ships inert (AUTOMATION_ENABLED unset). Reuses the server's scraper, feed
+// resolver, SSRF guard, and model wrapper; talks to Supabase with the
+// service-role key inside lib/automation for the browserless run.
+registerAutomationRoutes(app, {
+  fetchArticle,
+  resolveFeedUrl,
+  assertSafeUrl,
+  generate: generateArticleText,
+  hasAI: Boolean(anthropic),
 });
 
 // ── /api/publish/beehiiv ─────────────────────────────────────────────────────
