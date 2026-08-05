@@ -2,20 +2,6 @@
 
 *Audit date: 2026-07-27. Repo: `letterwriterai` (product name Curanta). Everything below describes what is actually in the code.*
 
-> **⚠ PARTIALLY STALE — corrected 2026-08-05.** Since this was written the schema and code have moved on. Known
-> wrong claims below, corrected here so future sessions don't work from bad info:
-> - **§1 "Tests: None in the repo"** and **§8 "no tests"** — **wrong now.** A test suite exists:
->   `lib/articles.test.mjs`, `lib/extract.test.mjs`, `lib/research.test.mjs`, run via `npm test`.
-> - **§3 "Four tables"** and **§3 "Articles themselves are never persisted server-side"** — **wrong now.** The
->   schema has **six** tables; `articles` and `article_prompts` were added
->   ([supabase-schema.sql:97–136](../supabase-schema.sql)), and a single-source article drafting feature ships
->   in [lib/articles.mjs](../lib/articles.mjs) (`/api/articles/extract`, `/api/articles/generate`).
-> - **§1 "one 1,970-line server file"** — server.mjs is now ~2,315 lines.
->
-> For anything about the **ingest → auto-draft → email automation**, treat
-> [automation-audit.md](automation-audit.md) as the source of truth — it is current as of 2026-08-05. The rest
-> of this document (architecture posture, multi-tenancy analysis, prompt-pipeline description) remains accurate.
-
 ## 1. Stack and architecture
 
 | Layer | What's there |
