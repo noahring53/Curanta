@@ -412,7 +412,14 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 });
 
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(join(__dirname, 'public')));
+// Serve the app shell/JS/CSS with `no-cache` so the browser always revalidates
+// (cheap ETag 304s on localhost) and can never run a stale app.js against a newer
+// server — the cause of "it worked before" frontend glitches after an update.
+app.use(express.static(join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(html|js|css)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
 app.use(globalLimiter);
 
 // ── /api/config ───────────────────────────────────────────────────────────────
@@ -2420,8 +2427,10 @@ function buildBeehiivHTML(newsletter) {
 app.get('/privacy', (_req, res) => res.sendFile(join(__dirname, 'public', 'privacy.html')));
 app.get('/terms',   (_req, res) => res.sendFile(join(__dirname, 'public', 'terms.html')));
 
-// Catch-all SPA route
+// Catch-all SPA route. no-cache so a refresh always fetches the current shell
+// (and therefore the current, revalidated app.js/articles.js).
 app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
