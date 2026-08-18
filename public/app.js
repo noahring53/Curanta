@@ -23,6 +23,28 @@ const state = {
     },
   },
   sources: [],             // { id, feedUrl, title, type, articles:[], collapsed:false }
+  inbox: {                 // Content Inbox: persisted, deduplicated candidate stories
+    items: [],
+    loading: false,
+    refreshing: false,
+    lastRefresh: null,
+    statusFilter: 'new',   // 'new' | 'reviewed' | 'dismissed' | 'all'
+    sourceFilter: 'all',   // source_id | 'all'
+    sort: 'newest',        // 'newest' | 'oldest'
+    query: '',
+  },
+  autoDraft: {             // server-managed Auto-Draft automation state (Settings → AI)
+    enabled: false,
+    lastCheckAt: '',
+    lastRunAt: '',
+    lastCreated: 0,
+    lastErrors: 0,
+    running: false,
+    scheduled: false,
+    maxPerCycle: 15,
+    loaded: false,
+    busy: false,           // transient: a toggle/run request is in flight
+  },
   tone: 'punchy-executive',
   brandVoice: '',
   brandVoiceSamples: '',
@@ -100,6 +122,69 @@ function consumePendingPlan() {
 // ── CONFIG & AUTH ─────────────────────────────────────────────────────────────
 let cfg = { supabaseUrl: '', supabaseAnonKey: '', hasAI: false };
 let sb = null;
+let LOCAL_USER = null; // set from /api/config in local (single-operator) mode
+
+// ── LOCAL MODE CLIENT SHIM ────────────────────────────────────────────────────
+// In local mode there is no Supabase. This shim exposes the exact slice of the
+// Supabase JS client the app uses — `from(table).select()/eq()/…` query chains
+// and an `auth` object — but backed by the server's /api/db/query (SQLite). It
+// lets every existing `sb.from(...)` call site work unchanged. Chains are
+// thenable so `await sb.from(t).select().eq(...)` resolves to { data, error },
+// and .single()/.maybeSingle() are terminal.
+function makeLocalClient() {
+  async function exec(spec) {
+    try {
+      const res = await fetch('/api/db/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(spec),
+      });
+      const json = await res.json().catch(() => ({ data: null, error: { message: `HTTP ${res.status}` } }));
+      if (!res.ok && !json.error) return { data: null, error: { message: `HTTP ${res.status}` } };
+      return json;
+    } catch (e) {
+      return { data: null, error: { message: e.message } };
+    }
+  }
+
+  class LocalQuery {
+    constructor(table) { this.spec = { table, action: 'select', filters: [] }; }
+    // .select() starts a read, OR — after insert/update/upsert — asks for the
+    // affected rows back (Supabase's `.insert(x).select()` pattern).
+    select(cols = '*') {
+      if (this.spec.action === 'select') this.spec.columns = cols;
+      else this.spec.returning = true;
+      return this;
+    }
+    eq(col, val) { this.spec.filters.push({ col, op: 'eq', val }); return this; }
+    is(col, val) { this.spec.filters.push({ col, op: 'is', val }); return this; }
+    neq(col, val) { this.spec.filters.push({ col, op: 'neq', val }); return this; }
+    order(col, opts = {}) { this.spec.order = { col, ascending: opts.ascending !== false }; return this; }
+    limit(n) { this.spec.limit = n; return this; }
+    insert(values) { this.spec.action = 'insert'; this.spec.values = values; return this; }
+    update(values) { this.spec.action = 'update'; this.spec.values = values; return this; }
+    upsert(values, opts = {}) { this.spec.action = 'upsert'; this.spec.values = values; if (opts.onConflict) this.spec.onConflict = opts.onConflict; return this; }
+    delete() { this.spec.action = 'delete'; return this; }
+    single() { this.spec.single = true; return exec(this.spec); }
+    maybeSingle() { this.spec.maybeSingle = true; return exec(this.spec); }
+    then(resolve, reject) { return exec(this.spec).then(resolve, reject); }
+  }
+
+  return {
+    from(table) { return new LocalQuery(table); },
+    auth: {
+      async getSession() { return { data: { session: { access_token: 'local', user: LOCAL_USER } }, error: null }; },
+      onAuthStateChange() { return { data: { subscription: { unsubscribe() {} } } }; },
+      async signOut() { return { error: null }; },
+      async signInWithPassword() { return { data: { user: LOCAL_USER }, error: null }; },
+      async signUp() { return { data: { user: LOCAL_USER }, error: null }; },
+      async signInWithOtp() { return { error: null }; },
+      async resend() { return { error: null }; },
+      async resetPasswordForEmail() { return { error: null }; },
+      async updateUser() { return { error: null }; },
+    },
+  };
+}
 
 // ── LOCAL STORAGE HELPERS ─────────────────────────────────────────────────────
 const LS_SOURCES_KEY = 'lwai_sources'; // legacy global key (pre per-publication)
@@ -153,7 +238,16 @@ async function init() {
     state.hasAI = cfg.hasAI;
     state.hasStripe = cfg.hasStripe;
     state.hasBeehiiv = cfg.hasBeehiiv;
-    if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
+    if (cfg.localMode) {
+      // Single-operator local mode: no login. Boot signed-in as the local user,
+      // backed by the SQLite store via the client shim, straight to the dashboard.
+      LOCAL_USER = cfg.localUser;
+      state.localMode = true;
+      sb = makeLocalClient();
+      state.user = cfg.localUser;
+      state.view = 'dashboard';
+      await loadUserSettings();
+    } else if (cfg.supabaseUrl && cfg.supabaseAnonKey) {
       sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
       const { data: { session } } = await sb.auth.getSession();
       if (session) {
@@ -265,6 +359,13 @@ async function navigate(view, params = {}) {
     state.sources = await loadSourcesFromDB();
     autoFetchSources();
   }
+  if (view === 'inbox' && sb && state.user) {
+    // Load sources too so the Inbox can label items and offer a per-source filter.
+    if (!state.sources.length) state.sources = await loadSourcesFromDB();
+    await loadInbox();
+    await loadAutoDraft();
+  }
+  if (view === 'settings') await loadAutoDraft();
   // Articles is its own workflow (see articles.js) but shares the same feeds.
   if (view === 'articles') await articlesOnNavigate();
 
@@ -313,6 +414,7 @@ function render() {
   migrateSectionConfigs(); // idempotent — fills mode/format/length/instructions on legacy metas
   if (state.view === 'landing') root.innerHTML = renderLanding();
   else if (state.view === 'dashboard') root.innerHTML = renderDashboard();
+  else if (state.view === 'inbox') root.innerHTML = renderInboxPage();
   else if (state.view === 'builder') root.innerHTML = renderBuilder();
   else if (state.view === 'articles') root.innerHTML = renderArticlesPage();
   else if (state.view === 'sources') root.innerHTML = renderSourcesPage();
@@ -350,9 +452,15 @@ function handleClick(e) {
   // Articles owns its own actions (articles.js) — everything art-* routes there
   // rather than growing this switch by another twenty cases.
   if (action.startsWith('art-')) { articlesHandleAction(action, d); return; }
+  // Inbox actions likewise route to their own handler.
+  if (action.startsWith('inbox-')) { inboxHandleAction(action, d); return; }
 
   switch (action) {
     case 'navigate':        navigate(d.view); break;
+    case 'autodraft-toggle': toggleAutoDraft(!state.autoDraft.enabled); break;
+    case 'autodraft-run':    runAutoDraftNow(); break;
+    case 'autodraft-email-toggle': toggleEmailDigest(!state.autoDraft.emailDigest); break;
+    case 'autodraft-test-email':   testEmailDigest(); break;
     case 'book-demo':       window.open('https://calendly.com/noahrin/60-minute-tutoring-clone', '_blank'); break;
     case 'show-pub-upgrade': document.querySelector('.pub-enterprise-card')?.scrollIntoView({behavior:'smooth',block:'center'}); document.querySelector('.pub-enterprise-card')?.classList.add('pub-enterprise-card-highlight'); setTimeout(()=>document.querySelector('.pub-enterprise-card')?.classList.remove('pub-enterprise-card-highlight'),1800); break;
     case 'new-publication':    showNewPublicationModal(); break;
@@ -413,6 +521,7 @@ function handleClick(e) {
     }
     case 'toggle-feed':     toggleFeed(d.feedId); break;
     case 'remove-feed':     removeFeed(d.feedId); break;
+    case 'refresh-source':  refreshSingleSource(d.feedId); break;
     case 'remove-article':  removeArticle(d.feedId, d.articleId); break;
     case 'add-to-section':  addToSection(d.articleId, d.section || 'leadStory'); break;
     case 'remove-from-section': removeFromSection(d.articleId, d.section); break;
@@ -1758,6 +1867,379 @@ function renderDashboard() {
 </div>`;
 }
 
+// ── CONTENT INBOX ─────────────────────────────────────────────────────────────
+// The pipeline's front door: persisted, deduplicated candidate stories pulled
+// from the operator's sources. Reviewing here is free — a model call happens
+// only when the operator sends a story to Articles to draft.
+
+function inboxNavCount() {
+  const n = (state.inbox.items || []).filter(i => (i.status || 'new') === 'new').length;
+  return n > 0
+    ? ` <span style="display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--nav-accent,#6366f1);color:#fff;font-size:11px;font-weight:700;text-align:center;line-height:18px">${n > 99 ? '99+' : n}</span>`
+    : '';
+}
+
+async function loadInbox() {
+  if (!sb || !state.user) return;
+  state.inbox.loading = true;
+  const { data, error } = await sb.from('inbox_items')
+    .select('*').eq('user_id', state.user.id)
+    .order('ingested_at', { ascending: false }).limit(300);
+  state.inbox.loading = false;
+  if (error) { console.error('[inbox] load error:', error.message); state.inbox.items = []; return; }
+  const pubId = state.currentPublicationId || null;
+  state.inbox.items = (data || []).filter(i => (i.publication_id ?? null) === pubId);
+}
+
+async function refreshInboxNow() {
+  if (state.inbox.refreshing) return;
+  if (!state.sources.length) { toast('Add a source first — Inbox pulls from your feeds.', 'warn'); navigate('sources'); return; }
+  state.inbox.refreshing = true;
+  refreshInboxControls();
+  try {
+    const res = await fetch('/api/inbox/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicationId: state.currentPublicationId || null }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Refresh failed (${res.status})`);
+    state.inbox.lastRefresh = new Date().toISOString();
+    await loadInbox();
+    const t = data.totals || {};
+    if (t.added) toast(`${t.added} new ${t.added === 1 ? 'story' : 'stories'} in your Inbox`, 'success');
+    else if (t.errors) toast(`No new stories — ${t.errors} feed${t.errors === 1 ? '' : 's'} had errors`, 'warn');
+    else toast('No new stories since last check', 'info');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    state.inbox.refreshing = false;
+    render();
+  }
+}
+
+// Live-update just the refresh button label without a full re-render (keeps the
+// spinner smooth while the network call is in flight).
+function refreshInboxControls() {
+  const btn = document.getElementById('inbox-refresh-btn');
+  if (btn) {
+    btn.disabled = state.inbox.refreshing;
+    btn.innerHTML = state.inbox.refreshing ? '<span class="spinner"></span> Checking feeds…' : '⟳ Refresh';
+  }
+}
+
+function inboxStatusCounts() {
+  const c = { new: 0, reviewed: 0, dismissed: 0, all: 0 };
+  for (const i of state.inbox.items || []) { c.all++; c[i.status || 'new'] = (c[i.status || 'new'] || 0) + 1; }
+  return c;
+}
+
+function filteredInboxItems() {
+  const { statusFilter, sourceFilter, sort, query } = state.inbox;
+  let items = [...(state.inbox.items || [])];
+  if (statusFilter !== 'all') items = items.filter(i => (i.status || 'new') === statusFilter);
+  if (sourceFilter !== 'all') items = items.filter(i => i.source_id === sourceFilter);
+  if (query.trim()) {
+    const q = query.trim().toLowerCase();
+    items = items.filter(i => (i.title || '').toLowerCase().includes(q) || (i.preview || '').toLowerCase().includes(q) || (i.source_title || '').toLowerCase().includes(q));
+  }
+  items.sort((a, b) => {
+    const av = a.published_at || a.ingested_at || '', bv = b.published_at || b.ingested_at || '';
+    return sort === 'oldest' ? String(av).localeCompare(bv) : String(bv).localeCompare(av);
+  });
+  return items;
+}
+
+// The results list only — re-rendered on its own when a filter/search changes so
+// the search box keeps focus while you type.
+function inboxBodyHTML() {
+  const items = filteredInboxItems();
+  const sources = state.sources || [];
+  const card = (i) => {
+    const status = i.status || 'new';
+    const badge = status === 'new'
+      ? '<span class="badge badge-green"><span class="dot dot-green"></span> New</span>'
+      : status === 'reviewed'
+        ? '<span class="badge badge-default">Reviewed</span>'
+        : '<span class="badge badge-default" style="opacity:.6">Dismissed</span>';
+    const when = i.published_at ? timeAgo(i.published_at) : (i.ingested_at ? timeAgo(i.ingested_at) : '');
+    // Auto-Draft status: a distinct, additional badge (independent of new/reviewed).
+    const ad = i.auto_draft_status || '';
+    const adBadge = ad === 'drafted'
+      ? '<span class="badge badge-accent" title="An article draft was generated automatically">✦ Drafted</span>'
+      : ad === 'drafting'
+        ? '<span class="badge badge-default"><span class="spinner" style="width:10px;height:10px;vertical-align:-1px"></span> Drafting…</span>'
+        : ad === 'failed'
+          ? `<span class="badge badge-red" title="${escHtml(i.auto_draft_error || 'Generation failed')}">⚠ Draft failed</span>`
+          : '';
+    return `
+    <div class="card inbox-item" style="padding:14px 18px;display:flex;flex-direction:column;gap:8px${status === 'dismissed' ? ';opacity:.55' : ''}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:650;font-size:15px;line-height:1.35;margin-bottom:3px">${escHtml(i.title || 'Untitled')}</div>
+          <div style="font-size:12px;color:var(--text-3);display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <span>📡 ${escHtml(i.source_title || 'Source')}</span>
+            ${when ? `<span>·</span><span>${when}</span>` : ''}
+            ${i.url ? `<span>·</span><a href="${escHtml(i.url)}" target="_blank" rel="noopener" style="color:var(--text-3);text-decoration:underline">open ↗</a>` : ''}
+          </div>
+        </div>
+        <div style="flex-shrink:0;display:flex;gap:6px;align-items:center">${adBadge}${badge}</div>
+      </div>
+      ${ad === 'failed' && i.auto_draft_error ? `<div style="font-size:11.5px;color:var(--red);line-height:1.4">Auto-draft failed: ${escHtml(i.auto_draft_error).slice(0, 160)}</div>` : ''}
+      ${i.preview ? `<div style="font-size:13px;color:var(--text-2);line-height:1.5">${escHtml(i.preview).slice(0, 260)}${(i.preview || '').length > 260 ? '…' : ''}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+        ${ad === 'drafted'
+          ? `<button class="btn btn-sm btn-primary" data-action="inbox-open-article" data-id="${i.id}">✦ Open article</button>`
+          : `<button class="btn btn-sm btn-primary" data-action="inbox-draft" data-id="${i.id}">✦ Draft article</button>`}
+        ${ad === 'failed' ? `<button class="btn btn-sm btn-outline" data-action="inbox-retry" data-id="${i.id}">↻ Retry auto-draft</button>` : ''}
+        ${status !== 'reviewed' ? `<button class="btn btn-sm btn-ghost" data-action="inbox-mark" data-id="${i.id}" data-status="reviewed">✓ Mark reviewed</button>` : `<button class="btn btn-sm btn-ghost" data-action="inbox-mark" data-id="${i.id}" data-status="new">↺ Mark new</button>`}
+        ${status !== 'dismissed' ? `<button class="btn btn-sm btn-ghost" style="color:var(--text-3)" data-action="inbox-mark" data-id="${i.id}" data-status="dismissed">Dismiss</button>` : `<button class="btn btn-sm btn-ghost" data-action="inbox-mark" data-id="${i.id}" data-status="new">Restore</button>`}
+      </div>
+    </div>`;
+  };
+
+  if (state.inbox.loading) return `<div class="empty-state"><div class="spinner"></div><div class="empty-state-sub" style="margin-top:10px">Loading inbox…</div></div>`;
+  if (sources.length === 0) return `<div class="empty-state">
+          <div style="font-size:32px;margin-bottom:12px">📥</div>
+          <div class="empty-state-title">Your inbox is empty</div>
+          <div class="empty-state-sub">Add RSS feeds or article URLs in <strong>Sources</strong>, then hit Refresh to pull in stories.</div>
+          <button class="btn btn-primary" style="margin-top:14px" data-action="navigate" data-view="sources">Add sources →</button>
+        </div>`;
+  if (items.length === 0) return `<div class="empty-state">
+            <div style="font-size:32px;margin-bottom:12px">✓</div>
+            <div class="empty-state-title">${state.inbox.items.length ? 'Nothing here' : 'No stories yet'}</div>
+            <div class="empty-state-sub">${state.inbox.items.length ? 'No items match this filter.' : 'Hit Refresh to pull the latest from your feeds.'}</div>
+            ${state.inbox.items.length ? '' : `<button class="btn btn-primary" style="margin-top:14px" data-action="inbox-refresh">⟳ Refresh now</button>`}
+          </div>`;
+  return `<div style="display:flex;flex-direction:column;gap:10px">${items.map(card).join('')}</div>`;
+}
+
+function renderInboxPage() {
+  const counts = inboxStatusCounts();
+  const sources = state.sources || [];
+  const lastRefresh = state.inbox.lastRefresh ? `Last checked ${timeAgo(state.inbox.lastRefresh)}` : 'Not checked yet';
+
+  const statusTab = (key, label) => `
+    <button class="btn btn-sm ${state.inbox.statusFilter === key ? 'btn-primary' : 'btn-ghost'}"
+      data-action="inbox-filter-status" data-status="${key}">${label}${counts[key] ? ` (${counts[key]})` : ''}</button>`;
+
+  return `
+<div class="app-shell">
+  ${renderAppNav('inbox')}
+  <div class="app-main">
+    ${renderTrialBanner()}
+    <div class="app-topbar">
+      <div>
+        <div class="page-title">Inbox</div>
+        <div class="page-sub">Candidate stories from your sources. Review, then draft the ones worth covering. <span style="color:var(--text-3)">${lastRefresh}</span></div>
+      </div>
+      <button id="inbox-refresh-btn" class="btn btn-primary" data-action="inbox-refresh" ${state.inbox.refreshing ? 'disabled' : ''}>
+        ${state.inbox.refreshing ? '<span class="spinner"></span> Checking feeds…' : '⟳ Refresh'}
+      </button>
+    </div>
+    <div class="page-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
+        ${statusTab('new', 'New')}
+        ${statusTab('reviewed', 'Reviewed')}
+        ${statusTab('dismissed', 'Dismissed')}
+        ${statusTab('all', 'All')}
+        <div style="flex:1"></div>
+        <input id="inbox-search" class="input" type="search" placeholder="Search inbox…" value="${escHtml(state.inbox.query)}" style="max-width:220px;height:34px" oninput="inboxOnSearch(this.value)">
+        <select id="inbox-source-filter" class="input" style="max-width:180px;height:34px" onchange="inboxOnSource(this.value)">
+          <option value="all"${state.inbox.sourceFilter === 'all' ? ' selected' : ''}>All sources</option>
+          ${sources.map(s => `<option value="${s.id}"${state.inbox.sourceFilter === s.id ? ' selected' : ''}>${escHtml(s.title || s.feedUrl)}</option>`).join('')}
+        </select>
+        <select id="inbox-sort" class="input" style="max-width:130px;height:34px" onchange="inboxOnSort(this.value)">
+          <option value="newest"${state.inbox.sort === 'newest' ? ' selected' : ''}>Newest</option>
+          <option value="oldest"${state.inbox.sort === 'oldest' ? ' selected' : ''}>Oldest</option>
+        </select>
+      </div>
+      <div id="inbox-list">${inboxBodyHTML()}</div>
+    </div>
+  </div>
+</div>`;
+}
+
+function updateInboxList() { const el = document.getElementById('inbox-list'); if (el) el.innerHTML = inboxBodyHTML(); }
+function inboxOnSearch(v) { state.inbox.query = v; updateInboxList(); }
+function inboxOnSource(v) { state.inbox.sourceFilter = v; updateInboxList(); }
+function inboxOnSort(v) { state.inbox.sort = v; updateInboxList(); }
+
+async function inboxMarkStatus(id, status) {
+  const item = (state.inbox.items || []).find(i => i.id === id);
+  if (item) item.status = status; // optimistic
+  refreshInboxAfterChange();
+  const { error } = await sb.from('inbox_items').update({ status }).eq('id', id).eq('user_id', state.user.id);
+  if (error) { toast('Could not update: ' + error.message, 'error'); await loadInbox(); render(); }
+}
+
+function refreshInboxAfterChange() {
+  // Re-render the page in place (keeps scroll roughly) and update the nav badge.
+  if (state.view === 'inbox') render();
+}
+
+async function inboxDraftFromItem(id) {
+  const item = (state.inbox.items || []).find(i => i.id === id);
+  if (!item) return;
+  if (!item.url) { toast('This item has no link to draft from', 'warn'); return; }
+  // Reviewing a story the moment you draft it keeps the "New" list honest.
+  if ((item.status || 'new') === 'new') { await inboxMarkStatus(id, 'reviewed'); }
+  await navigate('articles');
+  const added = artAddSource({ url: item.url, title: item.title, source: item.source_title, publishedAt: item.published_at, rss: true });
+  if (added) toast('Added to Articles — set your angle and Generate', 'success');
+}
+
+// Manually pull ONE feed into the Inbox (from the Sources page). Reloads source
+// rows afterwards so the "last checked" / error line updates in place.
+async function refreshSingleSource(sourceId) {
+  const src = state.sources.find(s => s.id === sourceId);
+  if (src) { src._refreshing = true; }
+  toast('Checking feed…', 'info');
+  try {
+    const res = await fetch('/api/inbox/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Refresh failed (${res.status})`);
+    state.sources = await loadSourcesFromDB();
+    const t = data.totals || {};
+    toast(t.errors ? 'Feed had an error — see status' : `${t.added || 0} new added to Inbox`, t.errors ? 'warn' : 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    render();
+  }
+}
+
+function inboxHandleAction(action, d) {
+  switch (action) {
+    case 'inbox-refresh': refreshInboxNow(); break;
+    case 'inbox-draft':   inboxDraftFromItem(d.id); break;
+    case 'inbox-mark':    inboxMarkStatus(d.id, d.status); break;
+    case 'inbox-filter-status': state.inbox.statusFilter = d.status; render(); break;
+    case 'inbox-open-article': inboxOpenArticle(d.id); break;
+    case 'inbox-retry':   inboxRetryDraft(d.id); break;
+    default: break;
+  }
+}
+
+// ── AUTO-DRAFT (client) ───────────────────────────────────────────────────────
+// Thin client over the server automation: the server owns the schedule, the lock,
+// and generation. This just reflects state and lets the operator flip the switch
+// or press "Run Now". Nothing here runs on an interval — the automation lives on
+// the backend so it works with the browser closed.
+async function loadAutoDraft() {
+  try {
+    const res = await fetch('/api/autodraft');
+    if (!res.ok) return;
+    const s = await res.json();
+    state.autoDraft = { ...state.autoDraft, ...s, loaded: true };
+  } catch (e) { /* endpoint only exists in local mode — leave defaults */ }
+}
+
+async function toggleAutoDraft(enabled) {
+  state.autoDraft.busy = true;
+  render();
+  try {
+    const res = await fetch('/api/autodraft/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const s = await res.json();
+    state.autoDraft = { ...state.autoDraft, ...s, loaded: true };
+    if (enabled) toast('Auto-Draft is ON — checking your sources now, then hourly', 'success');
+    else toast('Auto-Draft turned off. Existing drafts are kept.', 'info');
+  } catch (e) {
+    toast('Could not update Auto-Draft: ' + e.message, 'error');
+  } finally {
+    state.autoDraft.busy = false;
+    render();
+  }
+}
+
+async function runAutoDraftNow() {
+  if (state.autoDraft.busy) return;
+  if (!state.autoDraft.enabled) { toast('Turn Auto-Draft on first', 'warn'); return; }
+  state.autoDraft.busy = true;
+  render();
+  try {
+    const res = await fetch('/api/autodraft/run', { method: 'POST' });
+    const out = await res.json().catch(() => ({}));
+    if (out.state) state.autoDraft = { ...state.autoDraft, ...out.state };
+    if (out.skipped === 'in_progress') toast('A run is already in progress', 'info');
+    else if (out.skipped === 'disabled') toast('Auto-Draft is off', 'warn');
+    else {
+      const n = out.created || 0;
+      toast(n ? `Drafted ${n} new ${n === 1 ? 'story' : 'stories'}${out.failed ? `, ${out.failed} failed` : ''}` : 'No new stories to draft right now', n ? 'success' : 'info');
+      if (state.view === 'inbox') await loadInbox();
+    }
+  } catch (e) {
+    toast('Run failed: ' + e.message, 'error');
+  } finally {
+    state.autoDraft.busy = false;
+    render();
+  }
+}
+
+async function toggleEmailDigest(enabled) {
+  state.autoDraft.busy = true; render();
+  try {
+    const res = await fetch('/api/autodraft/email', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emailDigest: enabled }),
+    });
+    const s = await res.json();
+    state.autoDraft = { ...state.autoDraft, ...s };
+    toast(enabled ? 'Finished drafts will be emailed to you' : 'Email digest turned off', 'info');
+  } catch (e) {
+    toast('Could not update: ' + e.message, 'error');
+  } finally { state.autoDraft.busy = false; render(); }
+}
+
+async function testEmailDigest() {
+  state.autoDraft.busy = true; render();
+  try {
+    const res = await fetch('/api/autodraft/test-email', { method: 'POST' });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    toast(`Test email sent to ${out.to}`, 'success');
+  } catch (e) {
+    toast('Test email failed: ' + e.message, 'error');
+  } finally { state.autoDraft.busy = false; render(); }
+}
+
+// Open the article an Inbox item produced. Loads the drafts (DB) if needed, then
+// hands off to the Articles page's own open-draft flow.
+async function inboxOpenArticle(inboxId) {
+  const item = (state.inbox.items || []).find(i => i.id === inboxId);
+  if (!item || !item.generated_article_id) { toast('No article linked to this item', 'warn'); return; }
+  await navigate('articles');
+  if (typeof artOpenDraftById === 'function') {
+    const ok = await artOpenDraftById(item.generated_article_id);
+    if (!ok) toast('Could not find that draft', 'warn');
+  }
+}
+
+async function inboxRetryDraft(inboxId) {
+  const item = (state.inbox.items || []).find(i => i.id === inboxId);
+  if (item) { item.auto_draft_status = 'drafting'; } // optimistic
+  updateInboxList();
+  try {
+    const res = await fetch('/api/autodraft/retry', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: inboxId }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (out.error) throw new Error(out.error);
+    await loadInbox();
+    render();
+    toast(out.created ? 'Drafted — open it from the Inbox' : (out.failed ? 'Still failing — check the source URL' : 'Retry queued'), out.created ? 'success' : 'warn');
+  } catch (e) {
+    toast('Retry failed: ' + e.message, 'error');
+    await loadInbox(); render();
+  }
+}
+
 // ── SOURCES PAGE ──────────────────────────────────────────────────────────────
 function renderSourcesPage() {
   return `
@@ -1817,11 +2299,17 @@ function renderSourcesPage() {
             <div style="flex:1;min-width:0">
               <div style="font-weight:600;font-size:14px;margin-bottom:2px">${sourceIcon(s)} ${escHtml(s.title)}</div>
               <div style="font-size:12px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(s.feedUrl)}</div>
+              <div style="font-size:11px;margin-top:4px;color:${s.lastError ? 'var(--red)' : 'var(--text-3)'}">
+                ${s.lastError
+                  ? `⚠️ ${escHtml(s.lastError).slice(0, 80)}`
+                  : (s.lastCheckedAt ? `✓ Checked ${timeAgo(s.lastCheckedAt)}` : 'Not checked yet')}
+              </div>
             </div>
             <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
               <span class="badge ${s.articles.length > 0 ? 'badge-green' : 'badge-default'}">
                 ${s.articles.length > 0 ? `${s.articles.length} articles` : 'Fetching…'}
               </span>
+              ${state.localMode ? `<button class="btn btn-ghost btn-sm" style="font-size:12px" data-action="refresh-source" data-feed-id="${s.id}" title="Fetch this feed into the Inbox">⟳ Refresh</button>` : ''}
               <button class="btn btn-ghost btn-sm" style="color:var(--red);font-size:12px" data-action="remove-feed" data-feed-id="${s.id}">Remove</button>
             </div>
           </div>
@@ -2105,6 +2593,82 @@ function renderPublicationsPage() {
 </div>`;
 }
 
+// ── AUTOMATION SETTINGS (Auto-Draft) ──────────────────────────────────────────
+// The one place the operator turns automatic drafting on/off, sees the last run,
+// and can force a check. The switch and "Run Now" both hit the backend — no
+// client-side scheduling. Only meaningful in local mode (the API is local-only).
+function renderAutomationSettings() {
+  if (!state.localMode) return '';
+  const s = state.autoDraft || {};
+  const on = !!s.enabled;
+  const last = (iso) => iso ? timeAgo(iso) : '—';
+  const knob = on ? 'transform:translateX(20px);background:#fff' : 'transform:translateX(0);background:#fff';
+  const track = on ? 'background:var(--green,#22c55e)' : 'background:var(--border-md,#3a3a3a)';
+  return `
+  <div class="settings-section">
+    <div class="settings-section-title">Automation</div>
+    <div class="settings-section-sub">Hands-off drafting. When on, Curanta checks your active sources about once an hour and drafts newly discovered stories automatically — using your Master Article Prompt above. New drafts appear in <strong>Articles</strong> and are flagged in your <strong>Inbox</strong>.</div>
+
+    <div style="margin-top:16px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px;border:1px solid var(--border-md);border-radius:var(--r-md);background:var(--bg-3)">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:650;font-size:14px;display:flex;align-items:center;gap:8px">
+          Auto-Draft Articles
+          ${on ? '<span class="badge badge-green"><span class="dot dot-green"></span> On</span>' : '<span class="badge badge-default">Off</span>'}
+          ${s.running ? '<span class="text-xs" style="color:var(--accent)"><span class="spinner" style="width:11px;height:11px;vertical-align:-1px"></span> running…</span>' : ''}
+        </div>
+        <div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-top:6px">
+          Turning this <strong>on</strong> will cause AI generation to occur automatically (up to ${s.maxPerCycle || 15} new stories per hour). Turning it off stops future drafts — nothing already generated is deleted.
+        </div>
+      </div>
+      <button role="switch" aria-checked="${on}" data-action="autodraft-toggle" ${s.busy ? 'disabled' : ''}
+        title="${on ? 'Turn Auto-Draft off' : 'Turn Auto-Draft on'}"
+        style="flex-shrink:0;position:relative;width:44px;height:24px;border-radius:99px;border:none;cursor:${s.busy ? 'wait' : 'pointer'};padding:0;${track};transition:background .18s">
+        <span style="position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.35);${knob};transition:transform .18s"></span>
+      </button>
+    </div>
+
+    ${on ? `
+    <div style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--text-3)">
+        <span>Last source check: <strong style="color:var(--text-2)">${last(s.lastCheckAt)}</strong></span>
+        <span>Last auto-draft run: <strong style="color:var(--text-2)">${last(s.lastRunAt)}</strong></span>
+        <span>Drafts created last run: <strong style="color:var(--text-2)">${s.lastCreated || 0}</strong>${s.lastErrors ? ` <span style="color:var(--red)">· ${s.lastErrors} failed</span>` : ''}</span>
+      </div>
+      <button class="btn btn-outline btn-sm" data-action="autodraft-run" ${s.busy || s.running ? 'disabled' : ''}>
+        ${s.busy || s.running ? '<span class="spinner"></span> Checking…' : '⟳ Run Auto-Draft now'}
+      </button>
+    </div>
+
+    <!-- ── EMAIL DIGEST ── -->
+    <div style="margin-top:14px;padding:14px 16px;border:1px solid var(--border-md);border-radius:var(--r-md)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px">
+            📧 Email me finished drafts
+            ${!s.emailConfigured ? '<span class="badge badge-amber">Needs setup</span>' : s.emailDigest ? '<span class="badge badge-green"><span class="dot dot-green"></span> On</span>' : '<span class="badge badge-default">Off</span>'}
+          </div>
+          <div style="font-size:12px;color:var(--text-2);line-height:1.5;margin-top:5px">
+            ${s.emailConfigured
+              ? `After each run that produces drafts, Curanta emails them to <strong>${escHtml(s.emailTo || 'your address')}</strong>.`
+              : 'Add a free <strong>Resend</strong> API key to <code>.env</code> (<code>RESEND_API_KEY</code>) and set <code>DIGEST_EMAIL_TO</code>, then restart. Until then, drafts are saved in Articles only.'}
+            ${s.lastEmailError ? `<div style="color:var(--red);margin-top:4px">Last email error: ${escHtml(s.lastEmailError).slice(0,140)}</div>` : s.lastEmailAt ? `<div style="color:var(--text-3);margin-top:4px">Last emailed ${last(s.lastEmailAt)}.</div>` : ''}
+          </div>
+        </div>
+        ${s.emailConfigured ? `
+        <button role="switch" aria-checked="${s.emailDigest}" data-action="autodraft-email-toggle" ${s.busy ? 'disabled' : ''}
+          title="${s.emailDigest ? 'Stop emailing drafts' : 'Email drafts'}"
+          style="flex-shrink:0;position:relative;width:44px;height:24px;border-radius:99px;border:none;cursor:pointer;padding:0;${s.emailDigest ? 'background:var(--green,#22c55e)' : 'background:var(--border-md,#3a3a3a)'};transition:background .18s">
+          <span style="position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.35);${s.emailDigest ? 'transform:translateX(20px)' : 'transform:translateX(0)'};transition:transform .18s"></span>
+        </button>` : ''}
+      </div>
+      ${s.emailConfigured ? `
+      <div style="margin-top:10px">
+        <button class="btn btn-outline btn-sm" data-action="autodraft-test-email" ${s.busy ? 'disabled' : ''}>Send test email</button>
+      </div>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+
 function renderSettingsPage() {
   const tab = state.settingsTab || 'content';
   const tones = [
@@ -2304,6 +2868,8 @@ function renderSettingsPage() {
         </div>
       </div>
 
+      ${renderAutomationSettings()}
+
       <!-- ── FUTURE AI SETTINGS (placeholders) ── -->
       <div class="settings-section">
         <div class="settings-section-title">Generation Defaults <span class="badge badge-default" style="vertical-align:middle;margin-left:6px">Coming soon</span></div>
@@ -2409,11 +2975,14 @@ function renderAppNav(active) {
     <div class="nav-item ${active === 'dashboard' ? 'active' : ''}" data-action="navigate" data-view="dashboard">
       <span class="icon">⊞</span> Dashboard
     </div>
-    <div class="nav-item ${active === 'builder' ? 'active' : ''}" data-action="navigate" data-view="builder">
-      <span class="icon">✎</span> Newsletter
+    <div class="nav-item ${active === 'inbox' ? 'active' : ''}" data-action="navigate" data-view="inbox">
+      <span class="icon">📥</span> Inbox${inboxNavCount()}
     </div>
     <div class="nav-item ${active === 'articles' ? 'active' : ''}" data-action="navigate" data-view="articles">
       <span class="icon">📄</span> Articles
+    </div>
+    <div class="nav-item ${active === 'builder' ? 'active' : ''}" data-action="navigate" data-view="builder">
+      <span class="icon">✎</span> Newsletter
     </div>
     <div class="nav-item ${active === 'sources' ? 'active' : ''}" data-action="navigate" data-view="sources">
       <span class="icon">📡</span> Sources
@@ -2421,9 +2990,9 @@ function renderAppNav(active) {
     <div class="nav-item ${active === 'publications' ? 'active' : ''}" data-action="navigate" data-view="publications">
       <span class="icon">📰</span> Publications
     </div>
-    <div class="nav-item ${active === 'subscription' ? 'active' : ''}" data-action="navigate" data-view="subscription">
+    ${state.localMode ? '' : `<div class="nav-item ${active === 'subscription' ? 'active' : ''}" data-action="navigate" data-view="subscription">
       <span class="icon">✦</span> Subscription
-    </div>
+    </div>`}
     <div class="nav-item ${active === 'settings' ? 'active' : ''}" data-action="navigate" data-view="settings">
       <span class="icon">⚙️</span> Settings
     </div>
@@ -2926,7 +3495,7 @@ function insertArticleIntoSection(article, sectionId, { generate = true } = {}) 
         entry.content = await callAI(typeToAction[type] || 'quick-hit', entry, { prompt: effectivePrompt(sectionId) });
       } catch (e) {
         entry.content = entry.summary || entry.text || '(Failed to generate — click Rewrite to retry)';
-        if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('AI generation failed: ' + e.message, 'error');
+        if (!['subscription_required', 'generation_limit'].includes(e.message)) toast(aiErrorText(e), 'error');
       }
       entry.loading = false;
       refreshSectionContent(sectionId);
@@ -3267,7 +3836,7 @@ async function generateLeadStory(sectionId) {
     }
     toast(`${noun.charAt(0).toUpperCase() + noun.slice(1)} generated from ${sources.length} article${sources.length === 1 ? '' : 's'}`, 'success');
   } catch (e) {
-    if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
+    if (!['subscription_required', 'generation_limit'].includes(e.message)) toast(aiErrorText(e), 'error');
   }
   entry.loading = false;
   refreshSectionContent(sectionId);
@@ -3287,7 +3856,7 @@ async function generateIntro(sectionId) {
   try {
     entry.content = await callAI('section', {}, { prompt: fragments, section: sectionConfigFor(sectionId) });
   } catch (e) {
-    if (!['subscription_required', 'generation_limit'].includes(e.message)) toast('Generation failed: ' + e.message, 'error');
+    if (!['subscription_required', 'generation_limit'].includes(e.message)) toast(aiErrorText(e), 'error');
   }
   entry.loading = false;
   refreshSectionContent(sectionId);
@@ -3646,7 +4215,7 @@ async function generateTopStories() {
     scheduleSave();
     toast('Briefing generated', 'success');
   } catch (e) {
-    toast('Generation failed: ' + e.message, 'error');
+    toast(aiErrorText(e), 'error');
   } finally {
     const btn = document.querySelector('[data-action="generate-top-stories"]');
     if (btn) { btn.disabled = false; btn.textContent = '▶ Generate'; }
@@ -4059,7 +4628,7 @@ async function addToSection(articleId, sectionId) {
     entry.content = result;
   } catch (e) {
     entry.content = article.summary || article.text || '(Failed to generate — click Rewrite to retry)';
-    toast('AI generation failed: ' + e.message, 'error');
+    toast(aiErrorText(e), 'error');
   }
   entry.loading = false;
   refreshSectionContent(sectionId);
@@ -5417,6 +5986,24 @@ async function callAIStream(action, content, options = {}, onDelta, onProgress) 
 // Frame parser shared by every streaming endpoint (/api/ai, /api/articles/generate).
 // One implementation means one place where a partial-frame bug can exist.
 // `error` frames are thrown so callers handle failures in their catch block.
+// Turn a generation error (thrown by readSSEStream or a fetch) into an honest
+// sentence. Prefers the server's human message; falls back to a code map so a
+// provider hiccup never surfaces as a raw "provider_rate_limit" token.
+function aiErrorText(e) {
+  const map = {
+    provider_rate_limit: 'The AI provider is rate-limiting us — wait a moment and try again.',
+    provider_overloaded: 'The AI provider is temporarily overloaded — try again in a minute.',
+    provider_auth: 'The AI key was rejected — check ANTHROPIC_API_KEY in your .env.',
+    provider_bad_request: 'The AI request was invalid — try adjusting the prompt.',
+    generation_failed: 'Generation failed — please try again.',
+    article_rate_limit: "You're going a bit fast — wait a moment and try again.",
+    generation_limit: 'Monthly generation limit reached.',
+  };
+  if (e && e.serverMessage) return e.serverMessage;
+  if (e && map[e.message]) return map[e.message];
+  return (e && e.message) || 'Generation failed';
+}
+
 async function readSSEStream(res, { onData } = {}) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -5431,7 +6018,15 @@ async function readSSEStream(res, { onData } = {}) {
       const line = frame.trim();
       if (!line.startsWith('data:')) continue;
       let data; try { data = JSON.parse(line.slice(5).trim()); } catch { continue; }
-      if (data.error) throw new Error(data.error);
+      if (data.error) {
+        // Keep .message === the error CODE (callers compare it), but carry the
+        // human-readable server text and any HTTP status alongside it.
+        const err = new Error(data.error);
+        err.code = data.error;
+        err.serverMessage = data.message || '';
+        if (data.status) err.status = data.status;
+        throw err;
+      }
       onData && onData(data);
     }
   }
@@ -6100,6 +6695,13 @@ async function saveUserSettings() {
   cacheSettingsLocally(); // always mirror first — DB write can never lose your prompts
   if (!sb || !state.user) return;
 
+  // Guard against the classic wipe: never overwrite a saved prompt/layout blob
+  // (master prompts + section defaults) with an empty one — e.g. a save that
+  // fires before settings finish loading. The store merges omitted fields, so
+  // leaving default_prompts out of the payload preserves what's on disk.
+  const includeDP = !!(state.defaultPrompts && Object.keys(state.defaultPrompts).length > 0);
+  const dp = includeDP ? { default_prompts: state.defaultPrompts } : {};
+
   if (state.currentPublicationId) {
     // A non-default publication is active. Persist the brand-voice/audience/tone/prompts
     // ONLY to that publication's row — never to user_settings (which is the Default's store).
@@ -6107,14 +6709,14 @@ async function saveUserSettings() {
       brand_voice:     state.brandVoice      || '',
       audience_avatar: state.audienceAvatar  || '',
       tone:            state.tone            || 'punchy-executive',
-      default_prompts: state.defaultPrompts  || {},
+      ...dp,
     };
     let { error } = await sb.from('publications').update(pubFields)
       .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
     if (error) {
       // Retry with just the two most essential prompt fields in case a column is missing
       const { error: e2 } = await sb.from('publications')
-        .update({ brand_voice: pubFields.brand_voice, default_prompts: pubFields.default_prompts })
+        .update({ brand_voice: pubFields.brand_voice, ...dp })
         .eq('id', state.currentPublicationId).eq('user_id', state.user.id);
       if (e2) console.error('Publication settings save failed (cached locally):', e2.message);
     }
@@ -6138,7 +6740,7 @@ async function saveUserSettings() {
     voice_urls: state.voiceUrls || [],
     tone: state.tone || 'punchy-executive',
     brand_color: state.design.primaryColor || '#6366f1',
-    default_prompts: state.defaultPrompts || {},
+    ...dp,
     updated_at: new Date().toISOString(),
   };
   const { error } = await sb.from('user_settings').upsert(full, { onConflict: 'user_id' });
@@ -6151,7 +6753,7 @@ async function saveUserSettings() {
       brand_voice: state.brandVoice || '',
       audience_avatar: state.audienceAvatar || '',
       tone: state.tone || 'punchy-executive',
-      default_prompts: state.defaultPrompts || {},
+      ...dp,
       updated_at: new Date().toISOString(),
     };
     const { error: e2 } = await sb.from('user_settings').upsert(essential, { onConflict: 'user_id' });
@@ -6476,6 +7078,7 @@ function trialDaysLeft() {
 }
 
 function renderTrialBanner() {
+  if (state.localMode) return ''; // no billing in single-operator local mode
   if (state.subscriptionStatus === 'past_due') {
     return `<div class="trial-banner" style="border-color:var(--red);color:var(--red);background:var(--red-soft)">
       <span>⚠️ <strong>Payment failed.</strong> Update your payment method to keep access.</span>
@@ -6834,6 +7437,7 @@ function mapSourceRows(rows) {
   return (rows || []).map(s => ({
     id: s.id, feedUrl: s.feed_url, title: s.title || s.feed_url,
     type: s.type || 'feed', articles: [], collapsed: false,
+    lastCheckedAt: s.last_checked_at || null, lastError: s.last_error || '',
   }));
 }
 

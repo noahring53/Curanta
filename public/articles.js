@@ -32,7 +32,12 @@ const art = {
   search: '',              // sidebar headline filter
   urlInput: '',
   extractingUrl: '',       // url currently being fetched — drives the row spinner
-  source: null,            // { title, publication, author, publishedAt, url, wordCount, trimmed, cached, preview }
+  // Ordered list of sources the writer has dragged/added into the Article
+  // Sources workspace. The ORDER is the writer's chosen priority and is sent to
+  // generation as-is. Independent of state.sources so an RSS refresh never wipes
+  // a selection. Each: { id, title, publication, url, imageUrl, timeAgo, publishedAt, fromRss, wordCount? }
+  sources: [],
+  _dragSrcId: null,        // staged-source id currently being reordered
   angle: '',
   notes: '',
   // The master prompt lives in Settings → AI Settings and is applied by the
@@ -99,9 +104,25 @@ function artRowToDraft(r) {
     angle: r.angle || '', notes: r.notes || '', mode: r.mode || 'news',
     sourceUrl: r.source_url || '', sourceTitle: r.source_title || '',
     sourcePublication: r.source_publication || '', promptId: r.prompt_id || '',
+    // How the draft was created — 'auto' marks an Auto-Draft, shown with a badge.
+    generationSource: r.generation_source || 'manual',
     createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
   };
 }
+
+// Open a specific draft by id (used by the Inbox "Open article" link). Loads the
+// drafts list from the DB if the page hasn't yet, then routes through the normal
+// open-draft flow so the workspace/editor are restored identically.
+async function artOpenDraftById(id) {
+  if (!art.drafts.length || !art.drafts.some(d => d.id === id)) {
+    art.loaded = true;
+    art.drafts = await artLoadDrafts();
+  }
+  if (!art.drafts.some(d => d.id === id)) return false;
+  await articlesHandleAction('art-open-draft', { id });
+  return true;
+}
+window.artOpenDraftById = artOpenDraftById;
 
 async function artPersistDraft(draft) {
   draft.updatedAt = new Date().toISOString();
@@ -224,6 +245,7 @@ function renderArticlesPage() {
     <div class="builder-topbar-left">
       <button class="btn btn-ghost btn-sm" data-action="navigate" data-view="dashboard">← Back</button>
       <span class="section-label" style="min-width:0">Articles</span>
+      ${art.draft?.generationSource === 'auto' ? '<span class="badge badge-accent" title="This draft was generated automatically by Auto-Draft">✦ Auto-Drafted</span>' : ''}
       ${art.draft ? `<span class="save-pill" id="art-save-state">${art.saving ? 'Saving…' : 'Auto-saved'}</span>` : ''}
       ${art.draft ? `<span class="text-xs text-dim">${wordCount} words</span>` : ''}
     </div>
@@ -235,6 +257,7 @@ function renderArticlesPage() {
       <button class="btn btn-ghost btn-sm" data-action="art-new" title="Clear the workspace and start a new article">＋ New</button>
       <button class="btn btn-ghost btn-sm" data-action="art-open-drafts">🗂 Drafts${art.drafts.length ? ` (${art.drafts.length})` : ''}</button>
       <button class="btn btn-outline btn-sm" data-action="art-export" ${art.draft ? '' : 'disabled'}>↓ HTML</button>
+      <button class="btn btn-outline btn-sm" data-action="art-to-newsletter" ${art.draft ? '' : 'disabled'} title="Add this article to a newsletter as an editable block">→ Newsletter</button>
       <button class="btn btn-primary btn-sm" data-action="art-copy" ${art.draft ? '' : 'disabled'} title="Copy with formatting and links intact">⎘ Copy article</button>
     </div>
   </header>
@@ -259,7 +282,7 @@ function renderArticlesPage() {
       </div>` : `
       <form id="art-url-form" class="source-add-form">
         <input class="input input-sm" id="art-url-input" type="url" value="${escHtml(art.urlInput)}" placeholder="Paste any article URL…" autocomplete="off">
-        <button type="submit" class="btn btn-sm btn-primary" ${art.extractingUrl ? 'disabled' : ''}>${art.extractingUrl ? '…' : 'Extract'}</button>
+        <button type="submit" class="btn btn-sm btn-primary" ${art.extractingUrl ? 'disabled' : ''}>${art.extractingUrl ? '…' : '+ Add'}</button>
       </form>`}
       <div class="sources-list" id="sources-list">
         ${renderArticleSourceList()}
@@ -275,9 +298,10 @@ function renderArticlesPage() {
       <div class="newsletter-meta">
         <input id="art-headline" class="meta-input meta-subject" value="${escHtml(art.draft?.title || '')}"
           placeholder="Headline — generated, then yours to sharpen…" ${art.draft ? '' : 'disabled'}>
-        <div class="meta-preview" style="display:flex;align-items:center;gap:8px;min-height:22px">${renderArticleSourceLine()}</div>
+        <div class="meta-preview" style="display:flex;align-items:center;gap:8px;min-height:22px">${renderArticleSourceSummary()}</div>
       </div>
 
+      ${renderArticleSourcesSection()}
       ${renderArticleDirectionSection()}
       ${renderArticleDraftSection()}
     </main>
@@ -285,21 +309,199 @@ function renderArticlesPage() {
 </div>`;
 }
 
-// The source line under the headline: what this draft is being written from.
-function renderArticleSourceLine() {
-  const s = art.source;
-  if (!s) return `<span class="text-dim">No source selected — pick an article on the left, or paste a URL.</span>`;
-  const bits = [s.publication, s.author, s.publishedAt ? timeAgo(s.publishedAt) : '']
-    .filter(Boolean).map(escHtml).join(' · ');
+// One-line summary under the headline: how many sources feed this draft.
+function renderArticleSourceSummary() {
+  const n = art.sources.length;
+  if (!n) return `<span class="text-dim">No sources yet — drag stories in from the left, or paste a URL.</span>`;
+  const lead = art.sources[0];
+  return `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+    <strong style="color:var(--text-1);font-weight:600">${n} source${n === 1 ? '' : 's'}</strong>
+    — leads with “${escHtml((lead.title || '').slice(0, 60))}”${n > 1 ? ` +${n - 1} more` : ''}
+  </span>`;
+}
+
+// ── ARTICLE SOURCES WORKSPACE ──────────────────────────────────────────────────
+// A builder section whose drop zone is the "Article Sources" workspace. RSS
+// cards drag in from the sidebar; staged rows reorder among themselves and can
+// be removed; a URL can be pasted straight in. Reuses the builder's
+// .editor-section / .section-drop-zone / .drop-placeholder / .drag-over CSS.
+function renderArticleSourcesSection() {
+  const n = art.sources.length;
   return `
-    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.title)}">
-      <strong style="color:var(--text-1);font-weight:600">${escHtml(s.title)}</strong>
-      ${bits ? ` — ${bits}` : ''}
-    </span>
-    <span class="badge ${s.cached ? 'badge-blue' : 'badge-default'}" title="${s.trimmed ? `Trimmed from ${s.sourceWordCount} words to keep the token cost down` : 'Cleaned article text sent to the model'}">${s.wordCount}w${s.trimmed ? ' ✂' : ''}</span>
-    <button class="nl-action-btn" data-action="art-reextract" title="Fetch the page again and replace the cached copy">↻</button>
-    <a class="nl-action-btn" href="${escHtml(s.url)}" target="_blank" rel="noopener" title="Open the original">↗</a>
-    <button class="nl-action-btn danger" data-action="art-clear-source" title="Clear the selected source">×</button>`;
+<div class="editor-section">
+  <div class="section-header">
+    <span class="section-label">Article Sources</span>
+    <div class="section-prompt-wrap">
+      <span class="text-xs text-dim" style="flex:1">${n ? `${n} selected · drag to reorder` : 'Drag stories here, or paste a URL'}</span>
+      ${n ? `<button class="btn btn-sm btn-ghost btn-icon-sm" data-action="art-clear-sources" title="Remove all sources">Clear</button>` : ''}
+    </div>
+  </div>
+  <div class="section-drop-zone" id="art-sources-zone">
+    <div class="section-content" id="art-sources-content">
+      ${renderArticleSourcesBody()}
+    </div>
+    <div style="display:flex;gap:6px;padding:8px 12px;border-top:1px dashed var(--border)">
+      <input id="art-url-add" class="input input-sm" type="url" style="flex:1;font-size:11.5px"
+        placeholder="Or paste an article URL to add it…" autocomplete="off"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();articlesHandleAction('art-add-url',{})}">
+      <button class="btn btn-sm btn-outline" data-action="art-add-url" ${art.extractingUrl ? 'disabled' : ''} style="flex-shrink:0">
+        ${art.extractingUrl ? '…' : '+ Add'}
+      </button>
+    </div>
+  </div>
+</div>`;
+}
+
+function renderArticleSourcesBody() {
+  if (!art.sources.length) {
+    return `<div class="drop-placeholder" id="art-drop-placeholder">
+      <p style="font-size:13px;color:var(--text-2)">Drag an RSS story here</p>
+      <small style="font-size:11.5px">or paste a URL below. Add several — they're combined in this order.</small>
+    </div>`;
+  }
+  return `<div class="art-source-stack">${art.sources.map(renderStagedSource).join('')}</div>`;
+}
+
+// A staged source row: drag handle (reorder), thumbnail, title/meta, open, remove.
+function renderStagedSource(s, i) {
+  const host = artHost(s.url);
+  const meta = [s.publication || host, s.timeAgo || (s.publishedAt ? timeAgo(s.publishedAt) : '')].filter(Boolean).map(escHtml).join(' · ');
+  return `
+<div class="art-source-row" draggable="true" data-src-id="${escHtml(s.id)}"
+  ondragstart="artSourceDragStart(event,'${escHtml(s.id)}')" ondragend="artSourceDragEnd(event)" title="${escHtml(s.title || '')}">
+  <span class="art-source-handle" title="Drag to reorder">⠿</span>
+  <span class="art-source-num">${i + 1}</span>
+  ${s.imageUrl ? `<img class="art-source-thumb" src="${escHtml(s.imageUrl)}" alt="" onerror="this.remove()">` : ''}
+  <div class="art-source-body">
+    <div class="art-source-title">${escHtml(s.title || 'Untitled')}</div>
+    <div class="art-source-meta">${meta}</div>
+  </div>
+  <a class="nl-action-btn" href="${escHtml(s.url)}" target="_blank" rel="noopener" title="Open the original">↗</a>
+  <button class="nl-action-btn danger" data-action="art-remove-source" data-id="${escHtml(s.id)}" title="Remove">×</button>
+</div>`;
+}
+
+// ── SOURCE STATE (add / remove / reorder / dedup) ──────────────────────────────
+// Pure-ish operations on the ordered art.sources array. Kept small and explicit
+// so ordering and dedup are obvious (and mirrored by the exported test helpers
+// in lib/articles.mjs). Every mutation refreshes only the workspace + summary,
+// never the whole page, so the caret in the angle box is never lost.
+function artSourceExists(url, id) {
+  return art.sources.some(s => (id && s.id === id) || (url && s.url === url));
+}
+
+// Matches the server's fan-out cap (orderedUniqueUrls) so the count shown on the
+// button can never promise more sources than generation will actually use.
+const ART_MAX_SOURCES = 8;
+
+function artAddSource(src) {
+  const url = (src.url || '').trim();
+  if (!url) { toast('That source has no URL', 'warn'); return false; }
+  if (artSourceExists(url, src.id)) { toast('Already in your sources', 'warn'); return false; }
+  if (art.sources.length >= ART_MAX_SOURCES) { toast(`Up to ${ART_MAX_SOURCES} sources per article`, 'warn'); return false; }
+  art.sources.push({
+    id: src.id || 'src_' + uid(),
+    title: src.title || url,
+    publication: src.source || src.publication || artHost(url),
+    url,
+    imageUrl: src.imageUrl || '',
+    timeAgo: src.timeAgo || (src.publishedAt ? timeAgo(src.publishedAt) : ''),
+    publishedAt: src.publishedAt || '',
+    fromRss: !!src.rss,
+  });
+  refreshArticleWorkspace();
+  refreshArticleSidebar();   // reflect the ✓ added state on the card
+  artSyncGenerateButton();
+  return true;
+}
+
+function artRemoveSource(id) {
+  art.sources = art.sources.filter(s => s.id !== id);
+  refreshArticleWorkspace();
+  refreshArticleSidebar();
+  artSyncGenerateButton();
+}
+
+// Move the dragged source so it lands before `beforeId` (or to the end when
+// beforeId is null). Order is the whole point, so this is index arithmetic, not
+// a visual trick.
+function artMoveSource(dragId, beforeId) {
+  const from = art.sources.findIndex(s => s.id === dragId);
+  if (from === -1) return;
+  const [moved] = art.sources.splice(from, 1);
+  let to = beforeId == null ? art.sources.length : art.sources.findIndex(s => s.id === beforeId);
+  if (to === -1) to = art.sources.length;
+  art.sources.splice(to, 0, moved);
+  refreshArticleWorkspace();
+}
+
+function refreshArticleWorkspace() {
+  const body = document.getElementById('art-sources-content');
+  if (body) body.innerHTML = renderArticleSourcesBody();
+  const summary = document.querySelector('#editor-main .newsletter-meta .meta-preview');
+  if (summary) summary.innerHTML = renderArticleSourceSummary();
+  setupArticleWorkspace();
+}
+
+// ── DRAG-AND-DROP ──────────────────────────────────────────────────────────────
+// Two drag sources feed one drop zone:
+//   • sidebar RSS/recent cards  → add to the workspace (artCardDragStart)
+//   • staged rows               → reorder within the workspace (artSourceDragStart)
+// Native HTML5 DnD (same mechanism the newsletter builder uses) gives us
+// mouse+touch/pointer support and clean click-vs-drag separation for free.
+function artCardDragStart(e, el) {
+  art._dragCard = el.dataset.src || '';
+  art._dragSrcId = null;
+  e.dataTransfer.effectAllowed = 'copy';
+  e.dataTransfer.setData('text/plain', 'card');
+  setTimeout(() => el.classList.add('dragging'), 0);
+}
+function artCardDragEnd(e) { e.currentTarget.classList.remove('dragging'); art._dragCard = null; }
+window.artCardDragStart = artCardDragStart;
+window.artCardDragEnd = artCardDragEnd;
+
+function artSourceDragStart(e, id) {
+  art._dragSrcId = id;
+  art._dragCard = null;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'row');
+  setTimeout(() => e.target.classList.add('dragging'), 0);
+}
+function artSourceDragEnd(e) { e.target.classList.remove('dragging'); art._dragSrcId = null; }
+window.artSourceDragStart = artSourceDragStart;
+window.artSourceDragEnd = artSourceDragEnd;
+
+// Wires the workspace drop zone. Idempotent: a data flag prevents double-binding
+// across the partial refreshes, so one drop never fires twice.
+function setupArticleWorkspace() {
+  const zone = document.getElementById('art-sources-zone');
+  if (!zone || zone.dataset.dndBound) return;
+  zone.dataset.dndBound = '1';
+
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over'); });
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+
+    // Reorder an existing staged row: drop position = the row we're hovering.
+    if (art._dragSrcId) {
+      const rows = [...zone.querySelectorAll('.art-source-row')].filter(r => r.dataset.srcId !== art._dragSrcId);
+      let beforeId = null;
+      for (const r of rows) {
+        const rect = r.getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) { beforeId = r.dataset.srcId; break; }
+      }
+      artMoveSource(art._dragSrcId, beforeId);
+      art._dragSrcId = null;
+      return;
+    }
+    // Add a card dragged in from the sidebar.
+    if (art._dragCard) {
+      try { artAddSource(JSON.parse(art._dragCard)); } catch { /* malformed payload */ }
+      art._dragCard = null;
+    }
+  });
 }
 
 // ── SIDEBAR LIST ──────────────────────────────────────────────────────────────
@@ -342,49 +544,47 @@ function renderArticleSourceList() {
 <div class="source-divider"></div>
 ${!all.length
   ? `<div style="padding:16px;text-align:center;color:var(--text-3);font-size:12px">${q ? 'No headlines match that filter.' : 'Fetching articles…'}</div>`
-  : `<div class="art-list">${all.map(renderArticleRow).join('')}</div>`}`;
+  : `<div class="art-list">${all.map(a => renderArticleRow(a, { rss: true })).join('')}</div>`}`;
 }
 
 function renderArticleUrlList() {
-  const rows = [];
-  if (art.source) rows.push(renderArticleRow({
-    url: art.source.url, title: art.source.title, source: art.source.publication,
-    publishedAt: art.source.publishedAt,
-    timeAgo: art.source.publishedAt ? timeAgo(art.source.publishedAt) : '',
-  }));
-  const recents = art.recentUrls.filter(r => r.url !== art.source?.url);
+  const recents = art.recentUrls;
   return `
-${rows.length ? `<div class="art-list">${rows.join('')}</div><div class="source-divider"></div>` : ''}
 ${recents.length ? `
   <div class="source-manager" style="padding-bottom:0">
-    <div class="source-sidebar-title" style="padding:2px">Recent</div>
+    <div class="source-sidebar-title" style="padding:2px">Recently added</div>
   </div>
   <div class="art-list">${recents.map(r => renderArticleRow({
     url: r.url, title: r.title, source: r.publication, timeAgo: timeAgo(r.at),
-  })).join('')}</div>`
-: !art.source ? `<div class="source-empty">
+  }, { rss: false })).join('')}</div>`
+: `<div class="source-empty">
     <div class="source-empty-icon">🔗</div>
     <strong style="color:var(--text-2);font-size:13px">Paste an article URL</strong>
-    <p style="margin-top:6px">Any news page. It's fetched, stripped to the story, and cached — the same link is never processed twice.</p>
-  </div>` : ''}`;
+    <p style="margin-top:6px">Type a URL in the Article Sources box on the right, or paste one below to add it. Combine as many as you like.</p>
+  </div>`}`;
 }
 
-// One row = one candidate article. Same .article-card the builder's sidebar
-// uses, minus the drag/add-to-section affordances Articles has no use for.
-function renderArticleRow(a) {
-  const selected = art.source && a.url === art.source.url;
+// One candidate article. The SAME .article-card the builder's sidebar uses, now
+// draggable into the Article Sources workspace (reusing the builder's dragStart/
+// dragEnd via a source-specific payload). Click also adds it — a plain click
+// never starts a drag (native HTML5 DnD needs movement), so the two never
+// collide. Cards already in the workspace show a check and dim.
+function renderArticleRow(a, { rss } = {}) {
+  const inWorkspace = art.sources.some(s => (a.id && s.id === a.id) || (a.url && s.url === a.url));
   const busy = art.extractingUrl === a.url;
   const host = artHost(a.url);
+  const payload = escHtml(JSON.stringify({ id: a.id || '', url: a.url || '', title: a.title || '', source: a.source || '', imageUrl: a.imageUrl || '', timeAgo: a.timeAgo || '', publishedAt: a.publishedAt || '', rss: !!rss }));
   return `
-<div class="article-card ${selected ? 'selected' : ''}" data-action="art-pick" data-url="${escHtml(a.url || '')}"
-  style="cursor:pointer" title="${escHtml(a.title || '')}">
+<div class="article-card ${inWorkspace ? 'in-section' : ''}" data-action="art-add" data-src="${payload}"
+  draggable="true" ondragstart="artCardDragStart(event, this)" ondragend="artCardDragEnd(event)"
+  style="cursor:grab" title="${escHtml(a.title || '')}">
   <div class="article-card-title">${escHtml(a.title || 'Untitled')}</div>
   <div class="article-card-meta">
     <span class="article-card-source" style="display:flex;align-items:center;gap:5px;min-width:0">
       ${host ? `<img class="art-favicon" src="https://${escHtml(host)}/favicon.ico" alt="" onerror="this.remove()">` : ''}
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.source || host || '')}</span>
     </span>
-    <span class="article-card-time">${busy ? '<span class="spinner"></span>' : selected ? '✓ selected' : escHtml(a.timeAgo || '')}</span>
+    <span class="article-card-time">${busy ? '<span class="spinner"></span>' : inWorkspace ? '✓ added' : escHtml(a.timeAgo || '')}</span>
   </div>
 </div>`;
 }
@@ -395,7 +595,7 @@ function renderArticleRow(a) {
 // field that matters — the angle. The master prompt is set once in Settings and
 // applied by the server automatically; it is deliberately absent from this page.
 function renderArticleDirectionSection() {
-  const ready = Boolean(art.source && art.angle.trim()) && !art.generating;
+  const ready = art.sources.length > 0 && art.angle.trim().length > 0 && !art.generating;
   const overriding = art.promptOverride.trim().length > 0;
   return `
 <div class="editor-section">
@@ -404,8 +604,8 @@ function renderArticleDirectionSection() {
     <div class="section-prompt-wrap">
       <span style="flex:1"></span>
       <button class="btn btn-sm btn-primary" data-action="art-generate" ${ready ? '' : 'disabled'}
-        title="${!art.source ? 'Pick a source first' : !art.angle.trim() ? 'An angle is required' : 'Draft the article'}">
-        ${art.generating ? '<span class="spinner"></span> Generating' : '✦ Generate Article'}
+        title="${!art.sources.length ? 'Add at least one source first' : !art.angle.trim() ? 'An angle is required' : 'Draft the article'}">
+        ${art.generating ? '<span class="spinner"></span> Generating' : `✦ Generate Article${art.sources.length > 1 ? ` (${art.sources.length})` : ''}`}
       </button>
     </div>
   </div>
@@ -506,7 +706,7 @@ function renderArticleDraftBody() {
   if (!art.draft) {
     return `
     <div class="drop-placeholder">
-      <p style="font-size:13px;color:var(--text-2)">Pick an article, write the angle, hit <strong>✦ Generate Article</strong>.</p>
+      <p style="font-size:13px;color:var(--text-2)">Add sources, write the angle, hit <strong>✦ Generate Article</strong>.</p>
       <small style="font-size:11.5px">The draft opens here, editable, and saves as you type.</small>
     </div>`;
   }
@@ -631,7 +831,7 @@ function showArticleDraftsModal() {
       <div class="feed-health-item">
         <span class="dot ${d.status === 'published' ? 'dot-green' : d.status === 'review' ? 'dot-amber' : 'dot-dim'}"></span>
         <div style="flex:1;min-width:0">
-          <div class="feed-health-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(d.title || 'Untitled Article')}</div>
+          <div class="feed-health-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(d.title || 'Untitled Article')}${d.generationSource === 'auto' ? ' <span class="badge badge-accent" style="vertical-align:middle;font-size:10px">✦ Auto</span>' : ''}</div>
           <div class="text-xs text-dim" style="margin-top:2px">
             ${escHtml(d.sourcePublication || 'No source')} · ${artWordCount(d.bodyHtml)} words ·
             created ${escHtml(timeAgo(d.createdAt) || 'just now')} · updated ${escHtml(timeAgo(d.updatedAt) || 'just now')}
@@ -655,17 +855,24 @@ async function articlesHandleAction(action, d) {
     case 'art-search-clear':
       art.search = ''; render(); return true;
 
-    case 'art-pick':
-      await artExtract(d.url, false); return true;
+    // Click-to-add: the sidebar card carries its metadata in data-src so no
+    // network call is needed — an RSS story's text is fetched server-side at
+    // generation, exactly like the newsletter builder.
+    case 'art-add':
+      try { artAddSource(JSON.parse(d.src)); } catch { /* malformed */ }
+      return true;
 
-    case 'art-reextract':
-      await artExtract(art.source.url, true); return true;
+    case 'art-add-url':
+      await artAddUrl(); return true;
 
-    case 'art-clear-source':
-      art.source = null; render(); return true;
+    case 'art-remove-source':
+      artRemoveSource(d.id); return true;
+
+    case 'art-clear-sources':
+      art.sources = []; refreshArticleWorkspace(); refreshArticleSidebar(); artSyncGenerateButton(); return true;
 
     case 'art-new':
-      art.source = null; art.angle = ''; art.notes = ''; art.draft = null; art.urlInput = '';
+      art.sources = []; art.angle = ''; art.notes = ''; art.draft = null; art.urlInput = '';
       art.promptOverride = ''; art.advancedOpen = false;
       render(); return true;
 
@@ -714,6 +921,8 @@ async function articlesHandleAction(action, d) {
       return true;
     }
 
+    case 'art-to-newsletter': await artAddToNewsletter(); return true;
+
     case 'art-open-drafts':  showArticleDraftsModal(); return true;
     case 'art-close-modal':  closeModal(); return true;
 
@@ -723,11 +932,13 @@ async function articlesHandleAction(action, d) {
       art.draft = { ...draft };
       art.angle = draft.angle || art.angle;
       art.notes = draft.notes || art.notes;
-      // Reopening a draft re-selects its source, so Regenerate works instantly
-      // and the reader can see what it was written from. Cached: no refetch.
+      // Restore the draft's sources into the workspace so Regenerate works and
+      // the reader can see what it was written from. No network: metadata only.
+      art.sources = Array.isArray(draft.sources) && draft.sources.length
+        ? draft.sources.map(s => ({ ...s, id: s.id || 'src_' + uid() }))
+        : (draft.sourceUrl ? [{ id: 'src_' + uid(), title: draft.sourceTitle || draft.sourceUrl, publication: draft.sourcePublication || '', url: draft.sourceUrl, imageUrl: '', timeAgo: '', publishedAt: '', fromRss: false }] : []);
       closeModal();
       render();
-      if (draft.sourceUrl && draft.sourceUrl !== art.source?.url) artExtract(draft.sourceUrl, false);
       return true;
     }
 
@@ -772,6 +983,7 @@ function articlesHandleInput(t) {
     case 'art-override':
       art.promptOverride = t.value; return true;
     case 'art-url-input':
+    case 'art-url-add':
       art.urlInput = t.value; return true;
     case 'art-search':
       art.search = t.value; refreshArticleSidebar(); return true;
@@ -793,66 +1005,104 @@ function articlesHandleInput(t) {
 function artSyncGenerateButton() {
   const btn = document.querySelector('[data-action="art-generate"]');
   if (!btn) return;
-  btn.disabled = !(art.source && art.angle.trim()) || art.generating;
-  // The tooltip explains WHY it's disabled, so it has to move with the state —
-  // a stale "an angle is required" on an enabled button is worse than none.
-  btn.title = !art.source ? 'Pick a source first'
+  const ready = art.sources.length > 0 && art.angle.trim().length > 0;
+  btn.disabled = !ready || art.generating;
+  // The tooltip explains WHY it's disabled, so it has to move with the state.
+  btn.title = !art.sources.length ? 'Add at least one source first'
     : !art.angle.trim() ? 'An angle is required'
     : 'Draft the article';
+  btn.innerHTML = art.generating ? '<span class="spinner"></span> Generating'
+    : `✦ Generate Article${art.sources.length > 1 ? ` (${art.sources.length})` : ''}`;
 }
 
 function articlesHandleSubmit(form) {
-  if (form.id !== 'art-url-form') return false;
-  artExtract(document.getElementById('art-url-input').value.trim(), false);
-  return true;
+  // The sidebar URL form (URL mode) and the in-workspace URL box both add a source.
+  if (form.id === 'art-url-form') {
+    art.urlInput = document.getElementById('art-url-input')?.value.trim() || '';
+    artAddUrl();
+    return true;
+  }
+  return false;
 }
 
-// ── EXTRACTION ────────────────────────────────────────────────────────────────
-async function artExtract(url, refresh) {
+// ── ADD A SOURCE BY URL ─────────────────────────────────────────────────────────
+// A pasted URL is the one path that extracts on add — we validate it and pull
+// real metadata before it joins the workspace. RSS cards, by contrast, never
+// call the network here (their body is fetched server-side at generation).
+async function artAddUrl() {
+  const url = (document.getElementById('art-url-add')?.value || document.getElementById('art-url-input')?.value || art.urlInput || '').trim();
   if (!url) { toast('Paste an article URL first', 'warn'); return; }
+  try { new URL(url); } catch { toast("That doesn't look like a valid URL", 'warn'); return; }
+  if (artSourceExists(url)) { toast('Already in your sources', 'warn'); return; }
+
   art.extractingUrl = url;
+  refreshArticleWorkspace();
   refreshArticleSidebar();
   try {
     const res = await fetch('/api/articles/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, refresh }),
+      body: JSON.stringify({ url }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Extraction failed');
-    art.source = data.source;
-    if (art.sourceMode === 'url') {
-      art.urlInput = '';
-      // Recents make the second pass at a story one click instead of one paste.
-      art.recentUrls = [{ url: data.source.url, title: data.source.title, publication: data.source.publication, at: new Date().toISOString() },
-        ...art.recentUrls.filter(r => r.url !== data.source.url)].slice(0, 8);
-      artWriteLocal(artRecentKey(), art.recentUrls);
-    }
-    if (!data.cached) toast(`Extracted ${data.source.wordCount} words`, 'success');
-  } catch (e) {
-    toast(e.message, 'error');
-  } finally {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(artHumanError(res.status, data));
+    const s = data.source;
     art.extractingUrl = '';
-    render();
-    document.getElementById('art-angle')?.focus();
+    artAddSource({ id: '', url: s.url, title: s.title, source: s.publication, imageUrl: s.imageUrl || '', publishedAt: s.publishedAt, rss: false });
+    art.urlInput = '';
+    const inWs = document.getElementById('art-url-add'); if (inWs) inWs.value = '';
+    art.recentUrls = [{ url: s.url, title: s.title, publication: s.publication, at: new Date().toISOString() },
+      ...art.recentUrls.filter(r => r.url !== s.url)].slice(0, 8);
+    artWriteLocal(artRecentKey(), art.recentUrls);
+    if (!data.cached) toast(`Added — ${s.wordCount} words`, 'success');
+  } catch (e) {
+    art.extractingUrl = '';
+    refreshArticleWorkspace();
+    toast(e.message, 'error');
   }
+}
+
+// Turns a server error into an accurate, useful sentence — WITHOUT flattening
+// everything into "rate limited". The three rate-limit sources (our own throttle,
+// the source site's, the monthly quota) each get their own honest message.
+function artHumanError(status, data) {
+  const code = data && data.error;
+  const raw = (data && (data.message || data.error)) || '';
+  // Typed application/provider errors — each gets its own honest message so a
+  // provider hiccup is never mislabeled as our throttle, and vice versa.
+  if (code === 'article_rate_limit')  return data.message || "You're going a bit fast — wait a moment and try again.";
+  if (code === 'generation_limit')    return data.message || 'Monthly generation limit reached.';
+  if (code === 'provider_rate_limit') return data.message || 'The AI provider is rate-limiting us — wait a moment and try again.';
+  if (code === 'provider_overloaded') return data.message || 'The AI provider is temporarily overloaded — try again in a minute.';
+  if (code === 'provider_auth')       return data.message || 'The AI key was rejected — check ANTHROPIC_API_KEY.';
+  if (code === 'provider_bad_request')return data.message || 'The AI request was invalid.';
+  if (/rate-limiting us|rate limited by/i.test(raw)) return 'The source website is rate-limiting us — wait a minute and try again.';
+  if (status === 429) return raw || 'Too many requests right now — please wait a moment.';
+  if (status === 401 || status === 403) return 'Your session expired — please sign in again.';
+  if (status === 402) return 'A subscription is required to generate.';
+  if (status === 503) return raw || 'The AI provider is temporarily unavailable — try again shortly.';
+  if (status >= 500) return raw || 'The server had a problem — please try again.';
+  return raw || 'Something went wrong. Please try again.';
 }
 
 // ── GENERATION ────────────────────────────────────────────────────────────────
 async function artGenerate() {
-  if (!art.source || !art.angle.trim() || art.generating) return;
+  // In-flight guard: one click = one job, no matter how many times it's fired.
+  if (!art.sources.length || !art.angle.trim() || art.generating) return;
   art.generating = true;
-  art.genStatus = 'Reading the source…';
+  art.genStatus = art.sources.length > 1 ? `Reading ${art.sources.length} sources…` : 'Reading the source…';
   art.draft = null;          // skeleton first, exactly like a builder section
   refreshArticleDraft();
   render();
 
+  const lead = art.sources[0];
   const body = {
-    url: art.source.url,
+    // Ordered URLs — the workspace order IS the priority order. The master
+    // prompt is NOT sent (the server reads it from this user's settings); only a
+    // one-off override travels per request.
+    urls: art.sources.map(s => s.url),
     angle: art.angle,
     notes: art.notes,
-    // The master prompt is NOT sent — the server reads it from this user's
-    // settings. Only a one-off override (Advanced Options) travels per request.
     promptOverride: art.promptOverride.trim(),
     publicationId: state.currentPublicationId || '',
     mode: 'news',
@@ -869,6 +1119,7 @@ async function artGenerate() {
 
   let markdown = '';
   let mock = false;
+  let surfaced = false;   // has the user already been shown why it failed?
   try {
     const res = await fetch('/api/articles/generate', {
       method: 'POST',
@@ -877,9 +1128,11 @@ async function artGenerate() {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      if (data.error === 'subscription_required') { showSubscribeModal(); throw new Error('subscription_required'); }
-      if (data.error === 'generation_limit') { toast(data.message || 'Monthly generation limit reached', 'error'); throw new Error('generation_limit'); }
-      throw new Error(data.error || 'Generation failed');
+      if (data.error === 'subscription_required') { showSubscribeModal(); surfaced = true; throw new Error('subscription_required'); }
+      // Accurate, source-specific messaging — never a blanket "rate limited".
+      toast(artHumanError(res.status, data), 'error');
+      surfaced = true;
+      throw new Error(data.error || `http_${res.status}`);
     }
 
     // Live-render as it streams, the same way a builder section does: the first
@@ -900,7 +1153,7 @@ async function artGenerate() {
             const h = document.getElementById('art-headline');
             if (h) h.disabled = false;
           }
-          art.draft.title = title || art.source.title;
+          art.draft.title = title || lead.title;
           art.draft.bodyHtml = artMdToHtml(mdBody);
           artQueuePaint();
         } else if (data.progress) {
@@ -913,7 +1166,7 @@ async function artGenerate() {
 
     const { title, body: mdBody } = artSplitHeadline(markdown);
     if (!art.draft) art.draft = artNewDraft(title, mdBody);
-    art.draft.title = title || art.source.title || 'Untitled Article';
+    art.draft.title = title || lead.title || 'Untitled Article';
     art.draft.bodyHtml = artMdToHtml(mdBody);
     await artPersistDraft(art.draft);
     art.drafts.unshift({ ...art.draft });
@@ -922,8 +1175,14 @@ async function artGenerate() {
     if (mock) toast('Mock placeholder — set ANTHROPIC_API_KEY to draft for real', 'warn');
     else toast('Draft ready — edit it below', 'success');
   } catch (e) {
-    if (!['subscription_required', 'generation_limit'].includes(e.message)) {
-      toast(e.message || 'Generation failed', 'error');
+    // A pre-stream failure was already toasted (surfaced=true). But a mid-stream
+    // failure — a real provider 429/5xx AFTER the SSE headers flushed — arrives
+    // here as a thrown error frame that nothing else has shown. Surface it, or
+    // the skeleton would just vanish with no explanation (the exact silent
+    // failure this task set out to kill).
+    console.warn('[articles] generation failed:', e.code || e.message, e.serverMessage || '');
+    if (!surfaced && e.message !== 'subscription_required') {
+      toast(artHumanError(e.status || 500, { error: e.code || e.message, message: e.serverMessage }), 'error');
     }
   } finally {
     art.generating = false;
@@ -933,18 +1192,79 @@ async function artGenerate() {
   }
 }
 
+// ── Bridge: Article → Newsletter ──────────────────────────────────────────────
+// Turns the finished article into an editable block in a newsletter, completing
+// the DoD pipeline (approve an article → add it to the newsletter). It reuses the
+// newsletter's own state + save path (app.js globals), so the block persists,
+// renders, and is draggable exactly like any other section item.
+function artHtmlToText(html = '') {
+  const div = document.createElement('div');
+  div.innerHTML = html || '';
+  div.querySelectorAll('h1,h2,h3,h4,p,li,br,blockquote').forEach(el => el.insertAdjacentText('afterend', '\n'));
+  return (div.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+async function artAddToNewsletter() {
+  if (!art.draft) { toast('Generate or open an article first', 'warn'); return; }
+  const ed = document.getElementById('art-editor');
+  const title = (art.draft.title || 'Untitled').trim();
+  const html = ed ? ed.innerHTML : (art.draft.bodyHtml || '');
+  const contentText = artHtmlToText(html);
+  if (!contentText) { toast('Nothing to add yet', 'warn'); return; }
+
+  // Persist the draft first so it also remains in Drafts.
+  try { await artPersistDraft(art.draft); } catch {}
+
+  // Start a fresh issue only if there is genuinely nothing in progress.
+  if (!state.newsletterId && (!state.newsletter || !(state.newsletter.sectionOrder || []).length)) {
+    resetNewsletter();
+  }
+
+  // Find a section that renders per-article blocks (hits/generic). If the current
+  // template has none, add a dedicated "Articles" section so the block always
+  // renders and persists — never a silent no-op.
+  const meta = state.newsletter.sectionMeta || {};
+  let target = (state.newsletter.sectionOrder || []).find(id => ['hits', 'generic'].includes(meta[id]?.type));
+  if (!target) {
+    target = 'articles_' + uid();
+    state.newsletter.sectionOrder.push(target);
+    state.newsletter.sectionMeta[target] = { name: 'Articles', type: 'generic' };
+    state.newsletter.sections[target] = [];
+    state.newsletter.prompts[target] = '';
+  }
+  if (!Array.isArray(state.newsletter.sections[target])) state.newsletter.sections[target] = [];
+
+  state.newsletter.sections[target].push({
+    id: 'art_' + uid(),
+    title,
+    content: title ? `**${title}**\n\n${contentText}` : contentText,
+    source: art.draft.sourcePublication || art.draft.sourceTitle || 'Article',
+    url: art.draft.sourceUrl || '',
+    _fromArticle: true,
+  });
+
+  await saveNewsletter();
+  toast(`Added to "${state.newsletter.title}" → ${state.newsletter.sectionMeta[target]?.name || 'Articles'}`, 'success');
+  navigate('builder', { id: state.newsletterId });
+}
+
 function artNewDraft(title, mdBody) {
+  const lead = art.sources[0] || {};
   return {
     id: null,
-    title: title || art.source.title || 'Untitled Article',
+    title: title || lead.title || 'Untitled Article',
     bodyHtml: artMdToHtml(mdBody || ''),
     status: 'draft',
+    generationSource: 'manual',
     angle: art.angle,
     notes: art.notes,
     mode: 'news',
-    sourceUrl: art.source.url,
-    sourceTitle: art.source.title,
-    sourcePublication: art.source.publication,
+    // Full ordered source list is persisted so reopening a draft restores the
+    // workspace; the single fields stay for back-compat and the drafts list.
+    sources: art.sources.map(({ id, title, publication, url, imageUrl, publishedAt, fromRss }) => ({ id, title, publication, url, imageUrl, publishedAt, fromRss })),
+    sourceUrl: lead.url || '',
+    sourceTitle: lead.title || '',
+    sourcePublication: lead.publication || '',
     promptId: '',   // prompts are no longer per-draft; kept for the DB column's sake
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -963,8 +1283,10 @@ function artQueuePaint() {
   });
 }
 
-// Re-bind the editor after every render that puts it on screen. app.js's
-// render() replaces innerHTML wholesale, so listeners have to be reattached.
+// Re-bind non-delegated listeners after every render that puts them on screen.
+// app.js's render() replaces innerHTML wholesale, so the editor and the drag
+// zone have to be reattached each time.
 function articlesAfterRender() {
   artBindEditor();
+  setupArticleWorkspace();
 }

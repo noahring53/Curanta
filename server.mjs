@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -15,6 +15,17 @@ import {
 } from './lib/research.mjs';
 import { extractStructuredArticle } from './lib/extract.mjs';
 import { registerArticleRoutes } from './lib/articles.mjs';
+import * as store from './lib/store.mjs';
+import {
+  initStore, runQuery, isValidTable, LOCAL_USER,
+  getArticleMaster as storeArticleMaster, getUserSettings as storeUserSettings,
+} from './lib/store.mjs';
+import { registerInboxRoutes, refreshInbox } from './lib/inbox.mjs';
+import { registerAutoDraftRoutes, initAutoDraftScheduler } from './lib/autodraft.mjs';
+
+// Load .env from the server's own directory (not process cwd), so config is
+// found no matter where `node server.mjs` is launched from.
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env') });
 
 // How much scraped article text we keep. The research pipeline's whole premise
 // is that the model reads the ARTICLE, not a fragment of it — the old 6,500-char
@@ -66,6 +77,15 @@ async function assertSafeUrl(rawUrl) {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Behind a cloud proxy (Railway/Fly/Render/nginx), the client IP arrives in
+// X-Forwarded-For; without this, express-rate-limit sees only the proxy IP and
+// warns/limits incorrectly. Off by default so local dev is unchanged — set
+// TRUST_PROXY=1 (or the number of proxy hops) when deploying behind one.
+if (process.env.TRUST_PROXY) {
+  const n = Number(process.env.TRUST_PROXY);
+  app.set('trust proxy', Number.isFinite(n) ? n : 1);
+}
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const globalLimiter = rateLimit({
@@ -158,17 +178,62 @@ const REVIEW_ENABLED = process.env.RESEARCH_REVIEW !== 'off';
 // defaults to the strongest configured model rather than the research model.
 const MODEL_REVIEW = process.env.ANTHROPIC_MODEL_REVIEW || MODEL_LEAD;
 
-// Wraps anthropic.messages.create with an automatic model fallback: if the
-// requested model isn't available on this API key, retry once on the proven
-// fallback instead of failing the user's generation.
+// ── Provider error classification + retry ─────────────────────────────────────
+// The single source of truth for "is this the AI provider throttling/overloaded,
+// and should we wait and retry?" — so the app never mislabels a 500 or a bad
+// request as "rate limited", and genuinely transient 429/529s recover on their
+// own instead of surfacing as a failure.
+function isTransientProviderError(e) {
+  const s = e?.status;
+  return s === 429 || s === 529 || /overloaded/i.test(e?.message || '');
+}
+
+// Turn any provider error into a typed, honest, user-facing shape. This is what
+// distinguishes the failure types the brief asks for.
+function classifyAIError(e) {
+  const s = e?.status;
+  if (s === 429) return { status: 429, error: 'provider_rate_limit', message: 'The AI provider is rate-limiting us — wait a moment and try again.' };
+  if (s === 529 || /overloaded/i.test(e?.message || '')) return { status: 503, error: 'provider_overloaded', message: 'The AI provider is temporarily overloaded — try again in a minute.' };
+  if (s === 401 || s === 403) return { status: 500, error: 'provider_auth', message: 'The AI key was rejected — check ANTHROPIC_API_KEY.' };
+  if (s === 400) return { status: 400, error: 'provider_bad_request', message: e?.message || 'The AI request was invalid.' };
+  return { status: 500, error: 'generation_failed', message: e?.message || 'Generation failed.' };
+}
+
+function providerRetryDelayMs(e, attempt) {
+  const ra = Number(e?.headers?.['retry-after']);
+  if (ra > 0) return Math.min(ra * 1000, 30000);
+  return Math.min(1000 * 2 ** attempt, 15000); // 1s → 2s → 4s …, capped
+}
+
+const AI_MAX_RETRIES = Number(process.env.AI_MAX_RETRIES || 2);
+
+// Retry a provider call on transient 429/529 with exponential backoff (honouring
+// Retry-After when present). Never retries a bad request, auth error, or 500.
+async function withProviderRetry(fn) {
+  let attempt = 0;
+  for (;;) {
+    try { return await fn(); }
+    catch (e) {
+      if (attempt >= AI_MAX_RETRIES || !isTransientProviderError(e)) throw e;
+      const wait = providerRetryDelayMs(e, attempt);
+      console.warn(`[ai] provider ${e?.status || ''} ${e?.message || ''} — retry ${attempt + 1}/${AI_MAX_RETRIES} in ${wait}ms`);
+      await new Promise(r => setTimeout(r, wait));
+      attempt++;
+    }
+  }
+}
+
+// Wraps anthropic.messages.create with automatic model fallback (if the requested
+// model isn't available on this key, retry once on the proven fallback) AND
+// transient-error backoff, so a busy provider doesn't fail a user's generation.
 async function createWithFallback(params) {
   try {
-    return await anthropic.messages.create(params);
+    return await withProviderRetry(() => anthropic.messages.create(params));
   } catch (e) {
     const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
     if (notFound && params.model !== FALLBACK_MODEL) {
       console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
-      return anthropic.messages.create({ ...params, model: FALLBACK_MODEL });
+      return withProviderRetry(() => anthropic.messages.create({ ...params, model: FALLBACK_MODEL }));
     }
     throw e;
   }
@@ -186,6 +251,18 @@ const STRIPE_MULTI_PRICE_ID = process.env.STRIPE_MULTI_PRICE_ID || ''; // $99/mo
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET  || '';
 const APP_URL               = process.env.APP_URL || 'https://curanta-production.up.railway.app';
 const GENERATION_LIMIT      = 500; // per month per paid user
+
+// ── Local single-operator mode ────────────────────────────────────────────────
+// When no Supabase is configured the app runs as a personal, local tool: an
+// embedded SQLite database replaces Supabase (auth + Postgres), there is no
+// login, and billing gates are inert. This is the default, intended deployment
+// for one operator running their own newsletter. Supplying SUPABASE_URL switches
+// back to the multi-tenant SaaS path unchanged.
+const LOCAL_MODE = !SUPABASE_URL;
+if (LOCAL_MODE) {
+  initStore();
+  console.log('  Mode: ○ Local (SQLite) — single operator, no auth/billing');
+}
 
 // ── Supabase REST helpers ─────────────────────────────────────────────────────
 async function sbGet(table, filter, authToken) {
@@ -347,7 +424,28 @@ app.get('/api/config', (_req, res) => {
     stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY ?? '',
     hasStripe: !!process.env.STRIPE_SECRET_KEY,
     hasBeehiiv: !!(process.env.BEEHIIV_API_KEY && process.env.BEEHIIV_PUBLICATION_ID),
+    // Local single-operator mode: the frontend swaps its Supabase client for a
+    // local shim that talks to /api/db/query, and boots signed-in as this user.
+    localMode: LOCAL_MODE,
+    localUser: LOCAL_MODE ? LOCAL_USER : null,
   });
+});
+
+// ── /api/db/query — local persistence (SQLite) ────────────────────────────────
+// The single endpoint behind the frontend's local Supabase-client shim. Only
+// active in local mode; every request is implicitly the one local operator, so
+// there is no auth to check. The table whitelist lives in the store.
+app.post('/api/db/query', (req, res) => {
+  if (!LOCAL_MODE) return res.status(404).json({ error: 'Not in local mode' });
+  const spec = req.body || {};
+  if (!isValidTable(spec.table)) return res.status(400).json({ data: null, error: { message: 'Unknown table', code: 'BAD_TABLE' } });
+  // Every row belongs to the local operator — force ownership so a stray query
+  // can never read or write as a different user id.
+  if (spec.values && !Array.isArray(spec.values)) {
+    if ('user_id' in spec.values) spec.values.user_id = LOCAL_USER.id;
+  }
+  const result = runQuery(spec);
+  return res.json(result);
 });
 
 // ── /api/stripe/checkout ──────────────────────────────────────────────────────
@@ -625,28 +723,23 @@ async function resolveFeedUrl(rawUrl) {
   return { url: rawUrl, kind: 'rss' };
 }
 
-// ── /api/ingest ───────────────────────────────────────────────────────────────
-app.get('/api/ingest', ingestLimiter, async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'url is required' });
-  // quick=1 returns RSS items immediately (summaries only); full text is hydrated
-  // lazily via /api/hydrate when an article is actually used. Default: full fetch.
-  const quick = req.query.quick === '1' || req.query.quick === 'true';
-
-  try { await assertSafeUrl(url); }
-  catch (e) { return res.status(400).json({ error: e.message }); }
+// ── Ingestion core ────────────────────────────────────────────────────────────
+// Fetch + normalize one URL into `{ type, kind, source, feedUrl, articles }`.
+// Shared by the interactive /api/ingest endpoint and the Inbox pipeline so both
+// see identical, deduplicatable items. Throws (with a friendly message) on
+// failure; the caller decides how to report it. `quick` skips per-article
+// scraping — the default for the Inbox, which stores summaries only and never
+// spends a scrape (let alone an LLM call) until the operator picks a story.
+async function ingestUrl(url, { quick = false } = {}) {
+  await assertSafeUrl(url);
 
   // Resolve platform URLs (YouTube channels, subreddits, Medium profiles) to
   // their RSS equivalents. The resolved URL gets its own SSRF check.
   let feedUrl = url, kind = 'rss';
-  try {
-    const resolved = await resolveFeedUrl(url);
-    feedUrl = resolved.url;
-    kind = resolved.kind;
-    if (feedUrl !== url) await assertSafeUrl(feedUrl);
-  } catch (e) {
-    return res.status(400).json({ error: e.message });
-  }
+  const resolved = await resolveFeedUrl(url);
+  feedUrl = resolved.url;
+  kind = resolved.kind;
+  if (feedUrl !== url) await assertSafeUrl(feedUrl);
 
   // Try RSS/Atom first
   try {
@@ -668,7 +761,6 @@ app.get('/api/ingest', ingestLimiter, async (req, res) => {
 
     let articles;
     if (quick) {
-      // Instant: no per-article fetch. Text/images filled on demand later.
       articles = rawItems.map(buildBase);
     } else {
       articles = await Promise.all(rawItems.map(async (item) => {
@@ -681,24 +773,37 @@ app.get('/api/ingest', ingestLimiter, async (req, res) => {
       }));
     }
 
-    return res.json({ type: 'feed', kind, source: feedSource, feedUrl, articles });
+    return { type: 'feed', kind, source: feedSource, feedUrl, articles };
   } catch (_rssErr) {
-    // Fall through to single-article attempt
+    // Not a feed — fall through to single-article attempt.
   }
 
   // Try as a single article page (always full — it's just one)
   try {
     const article = await fetchArticle(url);
-    return res.json({
-      type: 'article',
-      source: article.source,
-      feedUrl: url,
-      articles: [article],
-    });
+    return { type: 'article', kind: 'article', source: article.source, feedUrl: url, articles: [article] };
   } catch (e) {
-    // Friendly, actionable messages pass through as-is; raw ones get a prefix
     const friendly = /blocks automated|rate-limiting|not found \(404\)|check the link/i.test(e.message);
-    return res.status(500).json({ error: friendly ? e.message : `Could not read that URL (${e.message})` });
+    const err = new Error(friendly ? e.message : `Could not read that URL (${e.message})`);
+    err.friendly = friendly;
+    throw err;
+  }
+}
+
+// ── /api/ingest ───────────────────────────────────────────────────────────────
+app.get('/api/ingest', ingestLimiter, async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  // quick=1 returns RSS items immediately (summaries only); full text is hydrated
+  // lazily via /api/hydrate when an article is actually used. Default: full fetch.
+  const quick = req.query.quick === '1' || req.query.quick === 'true';
+  try {
+    const result = await ingestUrl(url, { quick });
+    return res.json(result);
+  } catch (e) {
+    // URL / resolution / SSRF problems are the caller's — 400; a dead outlet is 500.
+    const status = /Invalid URL|Only http|Blocked|Could not resolve/.test(e.message) ? 400 : 500;
+    return res.status(status).json({ error: e.message });
   }
 });
 
@@ -2013,8 +2118,9 @@ Examples:
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (e) {
-      console.error('Anthropic stream error:', e.message);
-      res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+      const c = classifyAIError(e);
+      console.error(`Anthropic stream error (${c.error}):`, e.message);
+      res.write(`data: ${JSON.stringify({ error: c.error, message: c.message })}\n\n`);
       res.end();
     }
     return;
@@ -2030,8 +2136,9 @@ Examples:
     if (shouldSanitize) result = sanitizeAIVoice(result);
     return res.json({ result });
   } catch (e) {
-    console.error('Anthropic error:', e.message);
-    return res.status(500).json({ error: e.message });
+    const c = classifyAIError(e);
+    console.error(`Anthropic error (${c.error}):`, e.message);
+    return res.status(c.status).json({ error: c.error, message: c.message });
   }
 });
 
@@ -2050,6 +2157,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // to the active publication's row or the user's Default. RLS still applies: the
 // read runs with the caller's own token.
 async function loadArticleMaster(userId, authToken, publicationId) {
+  // Local mode: the master prompt lives in the SQLite store, read directly.
+  if (LOCAL_MODE) {
+    try { return storeArticleMaster(LOCAL_USER.id, publicationId); } catch { return ''; }
+  }
   if (!SUPABASE_URL || !authToken || !UUID_RE.test(String(userId || ''))) return '';
   try {
     const row = (publicationId && UUID_RE.test(String(publicationId)))
@@ -2091,17 +2202,31 @@ async function generateArticleText({ system, user, maxTokens, temperature, onDel
     return assembled;
   };
 
-  try {
-    return await runStream(params);
-  } catch (e) {
-    const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
-    // Only retry when nothing has been shown yet — a mid-stream restart would
-    // duplicate text the reader is already watching.
-    if (notFound && streamed === 0 && params.model !== FALLBACK_MODEL) {
-      console.warn(`Model ${params.model} unavailable, falling back to ${FALLBACK_MODEL}`);
-      return runStream({ ...params, model: FALLBACK_MODEL });
+  // Retry only while nothing has been shown — a mid-stream restart would
+  // duplicate text the reader is already watching. Covers both the "model not
+  // available on this key" fallback and transient provider 429/529 backoff.
+  let attempt = 0;
+  let model = params.model;
+  for (;;) {
+    try {
+      return await runStream({ ...params, model });
+    } catch (e) {
+      if (streamed > 0) throw e; // already streaming — cannot safely restart
+      const notFound = e?.status === 404 || /model|not_found/i.test(e?.message || '');
+      if (notFound && model !== FALLBACK_MODEL) {
+        console.warn(`Model ${model} unavailable, falling back to ${FALLBACK_MODEL}`);
+        model = FALLBACK_MODEL;
+        continue;
+      }
+      if (isTransientProviderError(e) && attempt < AI_MAX_RETRIES) {
+        const wait = providerRetryDelayMs(e, attempt);
+        console.warn(`[articles] provider ${e?.status || ''} — retry ${attempt + 1}/${AI_MAX_RETRIES} in ${wait}ms`);
+        await new Promise(r => setTimeout(r, wait));
+        attempt++;
+        continue;
+      }
+      throw e;
     }
-    throw e;
   }
 }
 
@@ -2111,9 +2236,50 @@ registerArticleRoutes(app, {
   hasAI: Boolean(anthropic),
   checkUsage: checkAndMeterUsage,
   loadMaster: loadArticleMaster,
+  classifyError: classifyAIError,
   extractLimiter: ingestLimiter,
   generateLimiter: aiLimiter,
 });
+
+// ── Content Inbox (local mode) ────────────────────────────────────────────────
+// Persistent, deduplicated inbox filled from the operator's sources. Only wired
+// in local mode — it writes to the SQLite store. No LLM is used to ingest.
+if (LOCAL_MODE) {
+  registerInboxRoutes(app, { ingestUrl, store, limiter: ingestLimiter });
+
+  // Optional background refresh so stories are "already waiting" when the app is
+  // opened, without a browser being open. Off by default (0); set
+  // INBOX_REFRESH_MINUTES to enable. Feed reads are cheap and never call the LLM.
+  const refreshMins = Number(process.env.INBOX_REFRESH_MINUTES || 0);
+  if (refreshMins > 0) {
+    const runBg = async () => {
+      try {
+        const out = await refreshInbox({ ingestUrl, store, publicationId: '__all__' });
+        console.log(`[inbox] background refresh: +${out.totals.added} new / ${out.totals.fetched} fetched across ${out.totals.sources} sources`);
+      } catch (e) { console.error('[inbox] background refresh failed:', e.message); }
+    };
+    setInterval(runBg, refreshMins * 60 * 1000).unref();
+    setTimeout(runBg, 5000).unref(); // one pass shortly after boot
+    console.log(`  Inbox: ⟳ background refresh every ${refreshMins} min`);
+  }
+
+  // ── Auto-Draft automation ──────────────────────────────────────────────────
+  // Optional: when ON, checks sources ~hourly and drafts NEW stories through the
+  // same article pipeline. One reusable cycle serves both the scheduler and the
+  // UI's "Run Now" button. Deps are the exact seams the manual Articles route uses,
+  // so auto-drafts are the same quality — only the trigger differs.
+  const autoDraftDeps = {
+    ingestUrl,
+    fetchArticle,
+    generate: generateArticleText,
+    loadMaster: loadArticleMaster,
+    hasAI: Boolean(anthropic),
+    classifyError: classifyAIError,
+  };
+  registerAutoDraftRoutes(app, { store, deps: autoDraftDeps, limiter: aiLimiter });
+  const autoOn = initAutoDraftScheduler(store, autoDraftDeps);
+  console.log(`  Auto-Draft: ${autoOn ? '✓ ON — checking sources ~hourly' : '○ OFF (enable in Settings → AI Settings)'}`);
+}
 
 // ── /api/publish/beehiiv ─────────────────────────────────────────────────────
 app.post('/api/publish/beehiiv', async (req, res) => {
@@ -2262,7 +2428,7 @@ app.get('*', (_req, res) => {
 app.listen(PORT, () => {
   console.log(`\n  Curanta → http://localhost:${PORT}`);
   console.log(`  AI: ${process.env.ANTHROPIC_API_KEY ? '✓ Anthropic connected' : '○ Mock mode (no ANTHROPIC_API_KEY)'}`);
-  console.log(`  Auth: ${process.env.SUPABASE_URL ? '✓ Supabase connected' : '○ Not configured (no SUPABASE_URL)'}\n`);
+  console.log(`  Auth: ${process.env.SUPABASE_URL ? '✓ Supabase connected' : '○ Local single-operator (no login)'}\n`);
 });
 
 // Exported for tests only (importing this module still starts the server —
